@@ -9,19 +9,24 @@ extends CharacterBody2D
 # P2（player_index=2）：藍色圓形
 #   移動：IJKL  |  瞄準：移動方向  |  射擊：Space
 #
-# 速度合成：主動移動 + _knockback（投射物擊退）+ _push（饕客推擠）
+# 受擊 Juice：
+#   - 昏厥 0.3s（無法移動、射擊）
+#   - 顯示旋轉（_spin_angle，用 draw_set_transform，不影響碰撞）
+#   - 壓扁彈回（_display_scale，Tween 驅動）
 # ===================================================
 
 @export var player_index : int = 1
 
 const SPEED            = 200.0
-const RADIUS           = 24.0   # ↑ 1.5x（16→24）
+const RADIUS           = 24.0
 const SHOOT_COOLDOWN   = 0.30
 const KNOCKBACK_DECAY  = 8.0
 const PUSH_DECAY       = 5.0
 const PUSH_MAX         = 280.0
 
-# 可活動的 arena 邊界（與 main.gd 的 ARENA 一致）
+const STUN_DURATION    = 0.30    # 昏厥時間（秒）
+const SPIN_SPEED_DEG   = 900.0   # 旋轉速度（度/秒）
+
 const ARENA_X_MIN = 160.0
 const ARENA_X_MAX = 1120.0
 const ARENA_Y_MIN = 100.0
@@ -32,10 +37,15 @@ const PROJECTILE_SCENE = preload("res://scenes/projectile.tscn")
 var _color : Color:
 	get: return Color(1.0, 0.50, 0.05) if player_index == 1 else Color(0.2, 0.55, 1.0)
 
-var _facing    : Vector2 = Vector2.RIGHT
-var _shoot_cd  : float   = 0.0
-var _knockback : Vector2 = Vector2.ZERO   # 投射物擊退（大衝量）
-var _push      : Vector2 = Vector2.ZERO   # 饕客推擠（連續小力）
+var _facing         : Vector2 = Vector2.RIGHT
+var _shoot_cd       : float   = 0.0
+var _knockback      : Vector2 = Vector2.ZERO
+var _push           : Vector2 = Vector2.ZERO
+
+# ── Juice 狀態 ────────────────────────────────────
+var _stun_timer     : float   = 0.0         # 昏厥倒數
+var _spin_angle     : float   = 0.0         # 顯示旋轉角度（弧度）
+var _display_scale  : Vector2 = Vector2.ONE  # 壓扁彈回 scale（Tween 驅動）
 
 
 func _ready() -> void:
@@ -45,6 +55,10 @@ func _ready() -> void:
 
 func _process(delta: float) -> void:
 	_shoot_cd -= delta
+
+	# 昏厥中禁止射擊
+	if _stun_timer > 0.0:
+		return
 
 	if player_index == 1:
 		if Input.is_action_pressed("p1_shoot") and _shoot_cd <= 0.0:
@@ -59,33 +73,42 @@ func _process(delta: float) -> void:
 func _physics_process(delta: float) -> void:
 	var dir = Vector2.ZERO
 
-	if player_index == 1:
-		if Input.is_action_pressed("p1_up"):    dir.y -= 1.0
-		if Input.is_action_pressed("p1_down"):  dir.y += 1.0
-		if Input.is_action_pressed("p1_left"):  dir.x -= 1.0
-		if Input.is_action_pressed("p1_right"): dir.x += 1.0
-		var to_mouse = get_global_mouse_position() - global_position
-		if to_mouse.length_squared() > 1.0:
-			_facing = to_mouse.normalized()
+	# ── 昏厥：累計旋轉角度，方向鍵失效 ────────────
+	if _stun_timer > 0.0:
+		_stun_timer -= delta
+		# 轉速隨昏厥剩餘時間衰減，結束前慢下來更有感
+		var spin_ratio = clamp(_stun_timer / STUN_DURATION, 0.0, 1.0)
+		_spin_angle += deg_to_rad(SPIN_SPEED_DEG * spin_ratio) * delta
+		# 昏厥結束時歸位（避免殘留角度）
+		if _stun_timer <= 0.0:
+			_spin_angle = 0.0
 	else:
-		if Input.is_action_pressed("p2_up"):    dir.y -= 1.0
-		if Input.is_action_pressed("p2_down"):  dir.y += 1.0
-		if Input.is_action_pressed("p2_left"):  dir.x -= 1.0
-		if Input.is_action_pressed("p2_right"): dir.x += 1.0
+		# ── 正常移動與瞄準 ──────────────────────
+		if player_index == 1:
+			if Input.is_action_pressed("p1_up"):    dir.y -= 1.0
+			if Input.is_action_pressed("p1_down"):  dir.y += 1.0
+			if Input.is_action_pressed("p1_left"):  dir.x -= 1.0
+			if Input.is_action_pressed("p1_right"): dir.x += 1.0
+			var to_mouse = get_global_mouse_position() - global_position
+			if to_mouse.length_squared() > 1.0:
+				_facing = to_mouse.normalized()
+		else:
+			if Input.is_action_pressed("p2_up"):    dir.y -= 1.0
+			if Input.is_action_pressed("p2_down"):  dir.y += 1.0
+			if Input.is_action_pressed("p2_left"):  dir.x -= 1.0
+			if Input.is_action_pressed("p2_right"): dir.x += 1.0
+			if dir != Vector2.ZERO:
+				_facing = dir.normalized()
+
 		if dir != Vector2.ZERO:
-			_facing = dir.normalized()
+			dir = dir.normalized()
 
-	if dir != Vector2.ZERO:
-		dir = dir.normalized()
-
-	# 衰減兩種外力（速率不同，knockback 衰減快、push 衰減慢）
 	_knockback = _knockback.lerp(Vector2.ZERO, KNOCKBACK_DECAY * delta)
 	_push      = _push.lerp(Vector2.ZERO,      PUSH_DECAY      * delta)
 
 	velocity = dir * SPEED + _knockback + _push
 	move_and_slide()
 
-	# 限制在 arena 範圍內
 	position.x = clamp(position.x, ARENA_X_MIN + RADIUS, ARENA_X_MAX - RADIUS)
 	position.y = clamp(position.y, ARENA_Y_MIN + RADIUS, ARENA_Y_MAX - RADIUS)
 
@@ -93,36 +116,61 @@ func _physics_process(delta: float) -> void:
 
 
 func _draw() -> void:
-	# ── 底部橢圓陰影
-	draw_set_transform(Vector2(3.0, RADIUS * 0.88), 0.0, Vector2(0.90, 0.22))
-	draw_circle(Vector2.ZERO, RADIUS, Color(0.0, 0.0, 0.0, 0.45))
+	# ── 底部橢圓陰影（不跟隨旋轉）
+	draw_set_transform(Vector2(3.0, RADIUS * 0.90), 0.0, Vector2(0.92, 0.20))
+	draw_circle(Vector2.ZERO, RADIUS, Color(0.0, 0.0, 0.0, 0.50))
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
-	# 主體圓形
-	draw_circle(Vector2.ZERO, RADIUS, _color)
-	draw_arc(Vector2.ZERO, RADIUS, 0.0, TAU, 40, Color.WHITE, 2.5)
+	# ── 主體（套用旋轉 + 壓扁 scale）
+	draw_set_transform(Vector2.ZERO, _spin_angle, _display_scale)
 
-	# 面朝方向指示線（隨尺寸拉長）
+	# 昏厥中閃爍：稍微調亮顏色作為受傷提示
+	var body_color = _color
+	if _stun_timer > 0.0:
+		var flash = 0.5 + 0.5 * sin(_stun_timer * 60.0)  # 快速閃爍
+		body_color = body_color.lerp(Color.WHITE, flash * 0.55)
+
+	draw_circle(Vector2.ZERO, RADIUS, body_color)
+	draw_arc(Vector2.ZERO, RADIUS, 0.0, TAU, 40, Color.WHITE, 2.5)
 	draw_line(Vector2.ZERO, _facing * (RADIUS + 12.0), Color.WHITE, 3.0)
 
-	# 玩家識別：P1 = 白點（大），P2 = 白色方塊（大）
 	if player_index == 1:
 		draw_circle(Vector2.ZERO, 6.0, Color.WHITE)
 	else:
 		draw_rect(Rect2(-6.0, -6.0, 12.0, 12.0), Color.WHITE)
 
+	# 重置繪製變換
+	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
-# ── 供 enemy.gd 呼叫：饕客推擠（連續軟力）────────
-# 每幀呼叫，force 已包含 delta，等效於加速度積分
+
+# ── 供 enemy.gd 呼叫：饕客軟推擠 ────────────────
 
 func apply_push(dir: Vector2, force: float) -> void:
 	_push = (_push + dir * force).limit_length(PUSH_MAX)
 
 
-# ── 供 projectile.gd 呼叫：投射物擊退（大衝量）──
+# ── 供 projectile.gd 呼叫：友火擊退 + 昏厥 ──────
 
 func apply_knockback(dir: Vector2, force: float) -> void:
 	_knockback += dir * force
+	_start_hit_reaction()
+
+
+func _start_hit_reaction() -> void:
+	# 昏厥計時器重置（可連續被打）
+	_stun_timer  = STUN_DURATION
+	_spin_angle  = 0.0
+
+	# 壓扁彈回動畫（用 Tween 驅動 _display_scale）
+	var tw = create_tween()
+	# 衝擊瞬間：橫向壓扁（誇張）
+	tw.tween_property(self, "_display_scale", Vector2(1.85, 0.40), 0.055)
+	# 回彈超過：縱向拉長
+	tw.tween_property(self, "_display_scale", Vector2(0.65, 1.50), 0.085)
+	# 二次回彈
+	tw.tween_property(self, "_display_scale", Vector2(1.15, 0.88), 0.08)
+	# 歸位
+	tw.tween_property(self, "_display_scale", Vector2(1.0,  1.0),  0.10)
 
 
 # ── 發射食物投射物 ────────────────────────────────
@@ -139,4 +187,4 @@ func _shoot(dir: Vector2) -> void:
 	if container == null:
 		return
 	container.add_child(proj)
-	proj.global_position = global_position + dir.normalized() * (RADIUS + 10.0)
+	proj.global_position = global_position + dir.normalized() * (RADIUS + 14.0)
