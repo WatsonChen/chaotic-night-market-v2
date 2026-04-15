@@ -20,7 +20,11 @@ const RADIUS             = 12.0    # ↑ 放大（8→12）
 const TRAIL_STEPS   = 11
 const TRAIL_SPACING = 8.5
 
-const HIT_EFFECT_SCRIPT = preload("res://scripts/hit_effect.gd")
+const HIT_EFFECT_SCRIPT    = preload("res://scripts/hit_effect.gd")
+const GREASE_PUDDLE_SCRIPT = preload("res://scripts/grease_puddle.gd")
+
+# 子彈飛行超過此時間未命中 → 落地變成滑地
+const PUDDLE_SPAWN_TIME = 2.0
 
 var direction : Vector2 = Vector2.RIGHT
 var shooter             = null
@@ -46,6 +50,13 @@ func _process(delta: float) -> void:
 		_grace_timer -= delta
 		if _grace_timer <= 0.0:
 			_can_hit_shooter = true
+
+	# 飛行 2 秒未命中 → 落地生成滑溜水漬
+	if not _dead and _lifetime >= PUDDLE_SPAWN_TIME:
+		_dead = true
+		_spawn_grease_puddle()
+		queue_free()
+		return
 
 	if _lifetime >= LIFETIME:
 		queue_free()
@@ -107,6 +118,15 @@ func _spawn_hit_effect() -> void:
 	fx.set_script(HIT_EFFECT_SCRIPT)
 	fx.global_position = global_position
 	get_tree().current_scene.add_child(fx)
+
+
+# ── 生成落地滑地 ──────────────────────────────────
+
+func _spawn_grease_puddle() -> void:
+	var puddle = Node2D.new()
+	puddle.set_script(GREASE_PUDDLE_SCRIPT)
+	puddle.global_position = global_position
+	get_tree().current_scene.add_child(puddle)
 
 
 # ── Hit Stop（全場暫停 ~3 幀）─────────────────────
