@@ -20,12 +20,12 @@ extends CharacterBody2D
 const SPEED            = 200.0
 const RADIUS           = 24.0
 const SHOOT_COOLDOWN   = 0.30
-const KNOCKBACK_DECAY  = 8.0
+const KNOCKBACK_DECAY  = 6.5    # ← 數字越小飛越遠（衰減越慢）
 const PUSH_DECAY       = 5.0
 const PUSH_MAX         = 280.0
 
-const STUN_DURATION    = 0.30    # 昏厥時間（秒）
-const SPIN_SPEED_DEG   = 900.0   # 旋轉速度（度/秒）
+const STUN_DURATION    = 0.38    # ← 調這裡改昏厥時間（秒）
+const SPIN_SPEED_DEG   = 1050.0  # ← 調這裡改旋轉速度（度/秒）
 
 const ARENA_X_MIN = 160.0
 const ARENA_X_MAX = 1120.0
@@ -161,16 +161,14 @@ func _start_hit_reaction() -> void:
 	_stun_timer  = STUN_DURATION
 	_spin_angle  = 0.0
 
-	# 壓扁彈回動畫（用 Tween 驅動 _display_scale）
+	# 壓扁彈回動畫（Tween 驅動 _display_scale）
+	# 數值說明：Vector2(橫向, 縱向)，1.0 = 原始大小
 	var tw = create_tween()
-	# 衝擊瞬間：橫向壓扁（誇張）
-	tw.tween_property(self, "_display_scale", Vector2(1.85, 0.40), 0.055)
-	# 回彈超過：縱向拉長
-	tw.tween_property(self, "_display_scale", Vector2(0.65, 1.50), 0.085)
-	# 二次回彈
-	tw.tween_property(self, "_display_scale", Vector2(1.15, 0.88), 0.08)
-	# 歸位
-	tw.tween_property(self, "_display_scale", Vector2(1.0,  1.0),  0.10)
+	tw.tween_property(self, "_display_scale", Vector2(2.10, 0.28), 0.05)   # 衝擊壓扁（誇張）
+	tw.tween_property(self, "_display_scale", Vector2(0.55, 1.70), 0.09)   # 縱向彈出
+	tw.tween_property(self, "_display_scale", Vector2(1.20, 0.82), 0.09)   # 二次壓
+	tw.tween_property(self, "_display_scale", Vector2(0.90, 1.12), 0.07)   # 三次回
+	tw.tween_property(self, "_display_scale", Vector2(1.0,  1.0),  0.09)   # 歸位
 
 
 # ── 發射食物投射物 ────────────────────────────────
