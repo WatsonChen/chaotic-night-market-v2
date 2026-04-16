@@ -3,29 +3,32 @@ extends CharacterBody2D
 # ===================================================
 # player.gd — 玩家控制
 #
-# P1（player_index=1）：橘色圓形
+# ── 角色設定（_ready 中依 player_index 初始化）──────
+#
+# P1 橘色「熱狗攤」
 #   移動：WASD  |  瞄準：滑鼠  |  射擊：左鍵
+#   風格：單發大顆、強擊退、較慢節奏。一發出事。
 #
-# P2（player_index=2）：藍色圓形
+# P2 藍色「珍奶攤」
 #   移動：IJKL  |  瞄準：移動方向  |  射擊：Space
+#   風格：快速 burst 連射（每次 3 發）、小顆弱推、刷畫面。
 #
-# 受擊 Juice：
-#   - 昏厥 0.3s（無法移動、射擊）
-#   - 顯示旋轉（_spin_angle，用 draw_set_transform，不影響碰撞）
-#   - 壓扁彈回（_display_scale，Tween 驅動）
+# ── 未來多機分離說明 ────────────────────────────────
+#   目前 P1/P2 共用一個腳本便於測試。
+#   真正上線時只需讓每台機器的 player_index 固定為 1，
+#   輸入改為搖桿/鍵盤 rebind 即可，架構無需大改。
 # ===================================================
 
 @export var player_index : int = 1
 
-const SPEED            = 200.0
-const RADIUS           = 24.0
-const SHOOT_COOLDOWN   = 0.30
-const KNOCKBACK_DECAY  = 6.5    # ← 數字越小飛越遠（衰減越慢）
-const PUSH_DECAY       = 5.0
-const PUSH_MAX         = 280.0
-
-const STUN_DURATION    = 0.38    # ← 調這裡改昏厥時間（秒）
-const SPIN_SPEED_DEG   = 1050.0  # ← 調這裡改旋轉速度（度/秒）
+# ── 通用移動參數 ──────────────────────────────────
+const SPEED           = 200.0
+const RADIUS          = 24.0
+const KNOCKBACK_DECAY = 6.5
+const PUSH_DECAY      = 5.0
+const PUSH_MAX        = 280.0
+const STUN_DURATION   = 0.38
+const SPIN_SPEED_DEG  = 1050.0
 
 const ARENA_X_MIN = 160.0
 const ARENA_X_MAX = 1120.0
@@ -33,6 +36,37 @@ const ARENA_Y_MIN = 100.0
 const ARENA_Y_MAX = 620.0
 
 const PROJECTILE_SCENE = preload("res://scenes/projectile.tscn")
+
+# ── 角色專屬攻擊參數（在 _ready 中依 player_index 填入）
+# P1 熱狗攤
+# ┌ shoot_cooldown    0.55    ← 調這裡改 P1 發射間隔（秒）
+# ├ proj_radius       16.0    ← 調這裡改 P1 子彈大小
+# ├ proj_speed        340.0   ← 調這裡改 P1 子彈速度
+# ├ proj_knockback    1400.0  ← 調這裡改 P1 友火擊退力
+# ├ proj_enemy_speed  600.0   ← 調這裡改 P1 打敵人飛出速度
+# ├ proj_hit_stop     4       ← 調這裡改 P1 hit stop 幀數
+# └ proj_color        橙黃色
+#
+# P2 珍奶攤
+# ┌ shoot_cooldown    0.48    ← 調這裡改 P2 burst 後冷卻（秒）
+# ├ burst_count       3       ← 調這裡改 P2 每次連射發數
+# ├ burst_delay       0.075   ← 調這裡改 P2 連射間隔（秒）
+# ├ proj_radius       7.0     ← 調這裡改 P2 子彈大小
+# ├ proj_speed        540.0   ← 調這裡改 P2 子彈速度
+# ├ proj_knockback    360.0   ← 調這裡改 P2 友火擊退力
+# ├ proj_enemy_speed  230.0   ← 調這裡改 P2 打敵人飛出速度
+# ├ proj_hit_stop     1       ← 調這裡改 P2 hit stop 幀數
+# └ proj_color        青藍色
+
+var shoot_cooldown   : float = 0.30
+var burst_count      : int   = 1      # =1 表示單發（P1 模式）
+var burst_delay      : float = 0.0
+var proj_radius      : float = 12.0
+var proj_speed       : float = 400.0
+var proj_knockback   : float = 950.0
+var proj_enemy_speed : float = 420.0
+var proj_hit_stop    : int   = 2
+var proj_color       : Color = Color(1.0, 0.92, 0.1)
 
 var _color : Color:
 	get: return Color(1.0, 0.50, 0.05) if player_index == 1 else Color(0.2, 0.55, 1.0)
@@ -43,47 +77,88 @@ var _knockback      : Vector2 = Vector2.ZERO
 var _push           : Vector2 = Vector2.ZERO
 
 # ── Juice 狀態 ────────────────────────────────────
-var _stun_timer     : float   = 0.0         # 昏厥倒數
-var _spin_angle     : float   = 0.0         # 顯示旋轉角度（弧度）
-var _display_scale  : Vector2 = Vector2.ONE  # 壓扁彈回 scale（Tween 驅動）
+var _stun_timer    : float   = 0.0
+var _spin_angle    : float   = 0.0
+var _display_scale : Vector2 = Vector2.ONE
+
+# ── P2 burst 狀態 ─────────────────────────────────
+var _burst_remaining : int   = 0
+var _burst_timer     : float = 0.0
+var _burst_dir       : Vector2 = Vector2.RIGHT  # burst 期間固定方向
 
 
 func _ready() -> void:
 	add_to_group("players")
+
+	# ── 依角色設定攻擊參數 ────────────────────────
+	if player_index == 1:
+		# P1 熱狗攤：大顆慢發、強擊退
+		shoot_cooldown   = 0.55
+		burst_count      = 1
+		proj_radius      = 16.0
+		proj_speed       = 340.0
+		proj_knockback   = 1400.0
+		proj_enemy_speed = 600.0
+		proj_hit_stop    = 4
+		proj_color       = Color(1.0, 0.75, 0.05)   # 橙黃
+
+	else:
+		# P2 珍奶攤：小顆快速連射 burst
+		shoot_cooldown   = 0.48   # burst 後冷卻
+		burst_count      = 3
+		burst_delay      = 0.075  # 連射每發間隔
+		proj_radius      = 7.0
+		proj_speed       = 540.0
+		proj_knockback   = 360.0
+		proj_enemy_speed = 230.0
+		proj_hit_stop    = 1
+		proj_color       = Color(0.35, 0.85, 1.0)   # 青藍
+
 	queue_redraw()
 
 
 func _process(delta: float) -> void:
 	_shoot_cd -= delta
 
-	# 昏厥中禁止射擊
 	if _stun_timer > 0.0:
 		return
 
+	# ── P2 burst 連射處理 ──────────────────────────
+	if _burst_remaining > 0:
+		_burst_timer -= delta
+		if _burst_timer <= 0.0:
+			_fire_projectile(_burst_dir)
+			_burst_remaining -= 1
+			_burst_timer = burst_delay
+		return   # burst 進行中不接受新射擊指令
+
+	# ── 一般射擊觸發 ──────────────────────────────
 	if player_index == 1:
 		if Input.is_action_pressed("p1_shoot") and _shoot_cd <= 0.0:
-			_shoot((get_global_mouse_position() - global_position).normalized())
-			_shoot_cd = SHOOT_COOLDOWN
+			var aim = (get_global_mouse_position() - global_position).normalized()
+			_fire_projectile(aim)
+			_shoot_cd = shoot_cooldown
+
 	else:
 		if Input.is_action_pressed("p2_shoot") and _shoot_cd <= 0.0:
-			_shoot(_facing)
-			_shoot_cd = SHOOT_COOLDOWN
+			# P2：立刻射第 1 發，剩餘 burst_count-1 發排入佇列
+			_burst_dir       = _facing
+			_fire_projectile(_burst_dir)
+			_burst_remaining = burst_count - 1
+			_burst_timer     = burst_delay
+			_shoot_cd        = shoot_cooldown
 
 
 func _physics_process(delta: float) -> void:
 	var dir = Vector2.ZERO
 
-	# ── 昏厥：累計旋轉角度，方向鍵失效 ────────────
 	if _stun_timer > 0.0:
 		_stun_timer -= delta
-		# 轉速隨昏厥剩餘時間衰減，結束前慢下來更有感
 		var spin_ratio = clamp(_stun_timer / STUN_DURATION, 0.0, 1.0)
 		_spin_angle += deg_to_rad(SPIN_SPEED_DEG * spin_ratio) * delta
-		# 昏厥結束時歸位（避免殘留角度）
 		if _stun_timer <= 0.0:
 			_spin_angle = 0.0
 	else:
-		# ── 正常移動與瞄準 ──────────────────────
 		if player_index == 1:
 			if Input.is_action_pressed("p1_up"):    dir.y -= 1.0
 			if Input.is_action_pressed("p1_down"):  dir.y += 1.0
@@ -116,18 +191,17 @@ func _physics_process(delta: float) -> void:
 
 
 func _draw() -> void:
-	# ── 底部橢圓陰影（不跟隨旋轉）
+	# 底部橢圓陰影
 	draw_set_transform(Vector2(3.0, RADIUS * 0.90), 0.0, Vector2(0.92, 0.20))
 	draw_circle(Vector2.ZERO, RADIUS, Color(0.0, 0.0, 0.0, 0.50))
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
-	# ── 主體（套用旋轉 + 壓扁 scale）
+	# 主體（旋轉 + 壓扁）
 	draw_set_transform(Vector2.ZERO, _spin_angle, _display_scale)
 
-	# 昏厥中閃爍：稍微調亮顏色作為受傷提示
 	var body_color = _color
 	if _stun_timer > 0.0:
-		var flash = 0.5 + 0.5 * sin(_stun_timer * 60.0)  # 快速閃爍
+		var flash = 0.5 + 0.5 * sin(_stun_timer * 60.0)
 		body_color = body_color.lerp(Color.WHITE, flash * 0.55)
 
 	draw_circle(Vector2.ZERO, RADIUS, body_color)
@@ -139,17 +213,16 @@ func _draw() -> void:
 	else:
 		draw_rect(Rect2(-6.0, -6.0, 12.0, 12.0), Color.WHITE)
 
-	# 重置繪製變換
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
 
-# ── 供 enemy.gd 呼叫：饕客軟推擠 ────────────────
+# ── 供 enemy.gd：饕客推擠 ────────────────────────
 
 func apply_push(dir: Vector2, force: float) -> void:
 	_push = (_push + dir * force).limit_length(PUSH_MAX)
 
 
-# ── 供 projectile.gd 呼叫：友火擊退 + 昏厥 ──────
+# ── 供 projectile.gd：友火擊退 + 昏厥 ───────────
 
 func apply_knockback(dir: Vector2, force: float) -> void:
 	_knockback += dir * force
@@ -157,32 +230,37 @@ func apply_knockback(dir: Vector2, force: float) -> void:
 
 
 func _start_hit_reaction() -> void:
-	# 昏厥計時器重置（可連續被打）
-	_stun_timer  = STUN_DURATION
-	_spin_angle  = 0.0
+	_stun_timer = STUN_DURATION
+	_spin_angle = 0.0
 
-	# 壓扁彈回動畫（Tween 驅動 _display_scale）
-	# 數值說明：Vector2(橫向, 縱向)，1.0 = 原始大小
 	var tw = create_tween()
-	tw.tween_property(self, "_display_scale", Vector2(2.10, 0.28), 0.05)   # 衝擊壓扁（誇張）
-	tw.tween_property(self, "_display_scale", Vector2(0.55, 1.70), 0.09)   # 縱向彈出
-	tw.tween_property(self, "_display_scale", Vector2(1.20, 0.82), 0.09)   # 二次壓
-	tw.tween_property(self, "_display_scale", Vector2(0.90, 1.12), 0.07)   # 三次回
-	tw.tween_property(self, "_display_scale", Vector2(1.0,  1.0),  0.09)   # 歸位
+	tw.tween_property(self, "_display_scale", Vector2(2.10, 0.28), 0.05)
+	tw.tween_property(self, "_display_scale", Vector2(0.55, 1.70), 0.09)
+	tw.tween_property(self, "_display_scale", Vector2(1.20, 0.82), 0.09)
+	tw.tween_property(self, "_display_scale", Vector2(0.90, 1.12), 0.07)
+	tw.tween_property(self, "_display_scale", Vector2(1.0,  1.0),  0.09)
 
 
-# ── 發射食物投射物 ────────────────────────────────
+# ── 發射單顆子彈（burst 和單發都走這裡）──────────
 
-func _shoot(dir: Vector2) -> void:
+func _fire_projectile(dir: Vector2) -> void:
 	if dir == Vector2.ZERO:
 		return
-
-	var proj = PROJECTILE_SCENE.instantiate()
-	proj.direction = dir.normalized()
-	proj.shooter   = self
 
 	var container = get_tree().current_scene.get_node_or_null("Projectiles")
 	if container == null:
 		return
+
+	var proj = PROJECTILE_SCENE.instantiate()
+	# 注入角色專屬參數（在 add_child 前設定，_ready 會用到）
+	proj.direction       = dir.normalized()
+	proj.shooter         = self
+	proj.proj_radius     = proj_radius
+	proj.proj_speed      = proj_speed
+	proj.player_knockback = proj_knockback
+	proj.enemy_fly_speed  = proj_enemy_speed
+	proj.hit_stop_frames  = proj_hit_stop
+	proj.proj_color       = proj_color
+
 	container.add_child(proj)
-	proj.global_position = global_position + dir.normalized() * (RADIUS + 14.0)
+	proj.global_position = global_position + dir.normalized() * (RADIUS + proj_radius + 4.0)
