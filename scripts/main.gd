@@ -127,6 +127,28 @@ const MAP_CENTER = Vector2(640.0, 360.0)
 @export var comeback_spawn_pause: float = 2.0
 @export var comeback_cooldown: float = 10.0
 
+@export_group("Victory Timer")
+@export var game_duration: float = 120.0         # ← 遊戲總時長（秒）
+@export var warning_time: float = 30.0           # ← 最後幾秒進入警告狀態
+@export var warning_shake_strength: float = 2.0  # ← 警告期間每次震動強度
+@export var warning_shake_interval: float = 3.5  # ← 震動間隔（秒）
+
+@export_group("Danger Vignette")
+@export var vignette_danger_color: Color = Color(1.0, 0.06, 0.06)  # ← 邊緣紅色
+@export var vignette_edge_size: float = 90.0                        # ← 邊緣厚度（px）
+@export var vignette_pulse_speed: float = 8.0                       # ← 閃爍頻率（Hz）
+@export var vignette_pulse_alpha_max: float = 0.30                  # ← 最深透明度
+@export var vignette_pulse_alpha_min: float = 0.10                  # ← 最淺透明度
+
+@export_group("Sprint Visual")
+@export var sprint_timer_color: Color = Color(1.0, 0.82, 0.18)      # ← 衝刺計時器主色（黃）
+@export var sprint_timer_flash_color: Color = Color(1.0, 0.52, 0.10) # ← 閃爍偏橘色
+@export var sprint_timer_blink_speed: float = 2.8                   # ← 計時器閃爍頻率（Hz）
+@export var sprint_brightness_color: Color = Color(1.0, 0.97, 0.68)  # ← 畫面亮度 pulse 顏色
+@export var sprint_brightness_alpha_max: float = 0.07               # ← pulse 最高透明度
+@export var sprint_brightness_speed: float = 3.0                    # ← pulse 頻率（Hz）
+@export var sprint_label_text: String = "快了！撐住！"               # ← 提示文字
+
 var complaint_count: int = 0
 var wave_count: int = 0
 var is_game_over: bool = false
@@ -167,6 +189,22 @@ var _spike_notice_tween: Tween
 var _comeback_notice_tween: Tween
 var _complaint_bump_tween: Tween
 
+var _time_left: float = 0.0
+var _next_warning_shake: float = 0.0
+var timer_label: Label
+var win_panel: Panel
+var win_final_label: Label
+
+# 危險 vignette（4 邊緣 ColorRect）
+var vignette_top: ColorRect
+var vignette_bottom: ColorRect
+var vignette_left: ColorRect
+var vignette_right: ColorRect
+
+# 衝刺效果
+var sprint_overlay: ColorRect
+var sprint_label: Label
+
 @onready var world_node: Node2D = $World
 @onready var food_court = $World/FoodCourt
 @onready var players_node: Node2D = $World/Players
@@ -181,6 +219,8 @@ func _ready() -> void:
 	_setup_ui()
 	_spawn_players()
 	_reset_spawn_timers()
+	_time_left = game_duration
+	_next_warning_shake = warning_shake_interval
 	_sync_tension_feedback()
 	queue_redraw()
 
@@ -194,6 +234,9 @@ func _process(delta: float) -> void:
 	if is_game_over:
 		return
 
+	_update_victory_timer(delta)
+	_update_danger_vignette(delta)
+	_update_sprint_visual(delta)
 	_comeback_cooldown_left = max(_comeback_cooldown_left - delta, 0.0)
 
 	if _spawn_pause_timer > 0.0:
@@ -798,8 +841,90 @@ func _trigger_game_over() -> void:
 
 	is_game_over = true
 	Engine.time_scale = 1.0
+	_clear_state_overlays()
 	final_label.text = "共 %d 次客訴\n撐到第 %d 波" % [complaint_count, wave_count]
 	game_over_panel.show()
+
+
+func _update_victory_timer(delta: float) -> void:
+	_time_left = max(_time_left - delta, 0.0)
+
+	var mins = int(_time_left) / 60
+	var secs = int(_time_left) % 60
+	timer_label.text = "%d:%02d" % [mins, secs]
+
+	if _time_left <= warning_time:
+		# 顏色由 _update_sprint_visual() 負責，這裡只處理震動
+		_next_warning_shake -= delta
+		if _next_warning_shake <= 0.0:
+			_next_warning_shake = warning_shake_interval
+			_add_shake(warning_shake_strength)
+	else:
+		timer_label.add_theme_color_override("font_color", Color(1.0, 0.95, 0.55))
+
+	if _time_left <= 0.0:
+		_trigger_win()
+
+
+func _trigger_win() -> void:
+	if is_game_over:
+		return
+
+	is_game_over = true
+	Engine.time_scale = 1.0
+	_clear_state_overlays()
+	win_final_label.text = "本場客訴：%d 次" % complaint_count
+	win_panel.show()
+
+
+func _update_danger_vignette(delta: float) -> void:
+	var target_alpha: float = 0.0
+	if complaint_count >= stage3_threshold:
+		var pulse = 0.5 + 0.5 * sin(_feedback_time * vignette_pulse_speed)
+		target_alpha = lerp(vignette_pulse_alpha_min, vignette_pulse_alpha_max, pulse)
+
+	var new_alpha = lerp(vignette_top.color.a, target_alpha, 6.0 * delta)
+	_set_vignette_alpha(new_alpha)
+
+
+func _set_vignette_alpha(alpha: float) -> void:
+	var c = Color(vignette_danger_color.r, vignette_danger_color.g, vignette_danger_color.b, alpha)
+	vignette_top.color    = c
+	vignette_bottom.color = c
+	vignette_left.color   = c
+	vignette_right.color  = c
+
+
+func _update_sprint_visual(delta: float) -> void:
+	var in_sprint = _time_left > 0.0 and _time_left <= warning_time
+
+	# ── 計時器閃爍顏色（黃↔橘，不用紅色）────────────────
+	if in_sprint:
+		var blink = 0.5 + 0.5 * sin(_feedback_time * sprint_timer_blink_speed)
+		var col = sprint_timer_color.lerp(sprint_timer_flash_color, blink)
+		timer_label.add_theme_color_override("font_color", col)
+
+	# ── 畫面整體亮度 pulse ────────────────────────────────
+	var target_alpha: float = 0.0
+	if in_sprint:
+		target_alpha = sprint_brightness_alpha_max * (0.5 + 0.5 * sin(_feedback_time * sprint_brightness_speed))
+	var new_alpha = lerp(sprint_overlay.color.a, target_alpha, 7.0 * delta)
+	sprint_overlay.color = Color(sprint_brightness_color.r, sprint_brightness_color.g, sprint_brightness_color.b, new_alpha)
+
+	# ── 衝刺提示文字（緩入緩出）──────────────────────────
+	var label_target: float = 0.0
+	if in_sprint:
+		label_target = 0.72 + 0.28 * sin(_feedback_time * sprint_timer_blink_speed * 0.5)
+	var new_label_a = lerp(sprint_label.modulate.a, label_target, 4.5 * delta)
+	sprint_label.modulate = Color(1.0, 1.0, 1.0, new_label_a)
+	sprint_label.visible  = new_label_a > 0.005
+
+
+func _clear_state_overlays() -> void:
+	_set_vignette_alpha(0.0)
+	sprint_overlay.color    = Color(sprint_brightness_color.r, sprint_brightness_color.g, sprint_brightness_color.b, 0.0)
+	sprint_label.modulate   = Color(1.0, 1.0, 1.0, 0.0)
+	sprint_label.visible    = false
 
 
 func _draw() -> void:
@@ -970,3 +1095,98 @@ func _setup_ui() -> void:
 	btn.add_theme_font_size_override("font_size", 22)
 	btn.pressed.connect(_on_restart_pressed)
 	vbox.add_child(btn)
+
+	# ── 倒數計時器（右上角）────────────────────────────
+	timer_label = Label.new()
+	timer_label.text = "%d:%02d" % [int(game_duration) / 60, int(game_duration) % 60]
+	timer_label.position = Vector2(990, 12)
+	timer_label.size = Vector2(160, 44)
+	timer_label.pivot_offset = Vector2(80, 22)
+	timer_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	timer_label.add_theme_font_size_override("font_size", 26)
+	timer_label.add_theme_color_override("font_color", Color(1.0, 0.95, 0.55))
+	ui_layer.add_child(timer_label)
+
+	# ── 勝利面板 ────────────────────────────────────────
+	win_panel = Panel.new()
+	win_panel.position = Vector2(390, 185)
+	win_panel.size = Vector2(500, 350)
+	win_panel.hide()
+	ui_layer.add_child(win_panel)
+
+	var win_vbox = VBoxContainer.new()
+	win_vbox.set_anchors_preset(Control.PRESET_FULL_RECT)
+	win_vbox.add_theme_constant_override("separation", 20)
+	win_vbox.alignment = BoxContainer.ALIGNMENT_CENTER
+	win_panel.add_child(win_vbox)
+
+	var win_title = Label.new()
+	win_title.text = "撐過 2 分鐘！"
+	win_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	win_title.add_theme_font_size_override("font_size", 40)
+	win_title.add_theme_color_override("font_color", Color(1.0, 0.90, 0.25))
+	win_vbox.add_child(win_title)
+
+	win_final_label = Label.new()
+	win_final_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	win_final_label.add_theme_font_size_override("font_size", 22)
+	win_final_label.add_theme_color_override("font_color", Color(0.9, 0.9, 0.9))
+	win_vbox.add_child(win_final_label)
+
+	var win_btn = Button.new()
+	win_btn.text = "重新開始"
+	win_btn.add_theme_font_size_override("font_size", 22)
+	win_btn.pressed.connect(_on_restart_pressed)
+	win_vbox.add_child(win_btn)
+
+	# ── 危險 vignette（4 邊緣色塊，初始透明）──────────────
+	var edge = vignette_edge_size
+	var base_vc = Color(vignette_danger_color.r, vignette_danger_color.g, vignette_danger_color.b, 0.0)
+
+	vignette_top = ColorRect.new()
+	vignette_top.position = Vector2(0.0, 0.0)
+	vignette_top.size = Vector2(1280.0, edge)
+	vignette_top.color = base_vc
+	vignette_top.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ui_layer.add_child(vignette_top)
+
+	vignette_bottom = ColorRect.new()
+	vignette_bottom.position = Vector2(0.0, 720.0 - edge)
+	vignette_bottom.size = Vector2(1280.0, edge)
+	vignette_bottom.color = base_vc
+	vignette_bottom.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ui_layer.add_child(vignette_bottom)
+
+	vignette_left = ColorRect.new()
+	vignette_left.position = Vector2(0.0, 0.0)
+	vignette_left.size = Vector2(edge, 720.0)
+	vignette_left.color = base_vc
+	vignette_left.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ui_layer.add_child(vignette_left)
+
+	vignette_right = ColorRect.new()
+	vignette_right.position = Vector2(1280.0 - edge, 0.0)
+	vignette_right.size = Vector2(edge, 720.0)
+	vignette_right.color = base_vc
+	vignette_right.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ui_layer.add_child(vignette_right)
+
+	# ── 衝刺亮度 pulse overlay ─────────────────────────────
+	sprint_overlay = ColorRect.new()
+	sprint_overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+	sprint_overlay.color = Color(sprint_brightness_color.r, sprint_brightness_color.g, sprint_brightness_color.b, 0.0)
+	sprint_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ui_layer.add_child(sprint_overlay)
+
+	# ── 衝刺提示文字 ──────────────────────────────────────
+	sprint_label = Label.new()
+	sprint_label.text = sprint_label_text
+	sprint_label.position = Vector2(440.0, 60.0)
+	sprint_label.size = Vector2(400.0, 50.0)
+	sprint_label.pivot_offset = Vector2(200.0, 25.0)
+	sprint_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	sprint_label.add_theme_font_size_override("font_size", 36)
+	sprint_label.add_theme_color_override("font_color", Color(1.0, 0.88, 0.22))
+	sprint_label.modulate = Color(1.0, 1.0, 1.0, 0.0)
+	sprint_label.visible = false
+	ui_layer.add_child(sprint_label)
