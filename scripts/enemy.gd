@@ -32,11 +32,17 @@ const SEP_RADIUS        = 56.0
 const SEP_FORCE         = 120.0
 
 # ── 擊飛參數（快速調整區）────────────────────────
-const FLY_DECEL          = 2.2    # ← 調這裡改減速率（越小飛越遠）
-const FLY_STOP_THRESH    = 60.0   # ← 調這裡改速度低於多少才開始淡出（px/s）
+const FLY_DECEL          = 1.3    # ↓ 2.2 → 1.3：減速更慢，飛得更遠
+const FLY_STOP_THRESH    = 38.0   # ↓ 60 → 38：速度更低才停下
 const CHAIN_TOUCH_DIST   = RADIUS * 2.0 + 8.0   # 56px
-const CHAIN_SPEED_RATIO  = 0.62   # ← 調這裡改連鎖速度遞減比例
-const CHAIN_PLAYER_FORCE = 380.0  # ← 調這裡改連鎖對玩家的擊退力
+const CHAIN_SPEED_RATIO  = 0.72   # ↑ 0.62 → 0.72：連鎖保留更多速度
+const CHAIN_PLAYER_FORCE = 540.0  # ↑ 380 → 540：連鎖更用力推玩家
+
+# ── 混亂移動參數 ─────────────────────────────────
+const CHAOS_SPEED        = 130.0  # 混亂狀態移動速度（px/s）
+const CHAOS_DURATION_MIN = 0.55   # 最短混亂時間（秒）
+const CHAOS_DURATION_MAX = 1.0    # 最長混亂時間（秒）
+const HIT_ANGLE_SPREAD   = 0.70   # 被擊方向隨機偏移（弧度，±40 度）
 
 @export var push_power : float = 1.0
 
@@ -53,6 +59,14 @@ var _spin_speed    : float   = 0.0
 var _fading        : bool    = false   # 是否已進入淡出（防重複觸發）
 var _chain_hit_bodies : Array = []
 
+# ── 混亂狀態（飛停後短暫失控）─────────────────────
+var _chaotic       : bool    = false
+var _chaos_timer   : float   = 0.0
+var _chaos_vel     : Vector2 = Vector2.ZERO
+
+# ── Juice：命中壓扁 ──────────────────────────────
+var _display_scale : Vector2 = Vector2.ONE
+
 
 func _ready() -> void:
 	add_to_group("enemies")
@@ -60,6 +74,18 @@ func _ready() -> void:
 
 
 func _physics_process(delta: float) -> void:
+	# ── 混亂移動（飛停後短暫失控）────────────────────
+	if _chaotic:
+		_chaos_timer -= delta
+		velocity = _chaos_vel
+		move_and_slide()
+		_spin_angle += _spin_speed * delta
+		queue_redraw()
+		if _chaos_timer <= 0.0:
+			_chaotic = false
+			_start_fade()
+		return
+
 	# ── 擊飛中 ────────────────────────────────────
 	if _dying:
 		_hit_vel    = _hit_vel.lerp(Vector2.ZERO, FLY_DECEL * delta)
@@ -68,14 +94,28 @@ func _physics_process(delta: float) -> void:
 		velocity     = _hit_vel
 		move_and_slide()
 
+		# 飛行中撞到中央 → 直接進場（讓玩家的攻擊可能害敵人進場）
+		if global_position.distance_to(MAP_CENTER) <= REACH_DIST:
+			reach_center.emit()
+			queue_free()
+			return
+
 		# 速度夠高才做連鎖（避免停下後還在偵測）
 		if _hit_vel.length() > CHAIN_TOUCH_DIST:
 			_check_chain_collision()
 
-		# 速度低於閾值 → 開始淡出（只觸發一次）
+		# 速度低於閾值 → 進入短暫混亂狀態（不立刻消失）
 		if not _fading and _hit_vel.length() < FLY_STOP_THRESH:
 			_fading = true
-			_start_fade()
+			_chaotic = true
+			_chaos_timer = randf_range(CHAOS_DURATION_MIN, CHAOS_DURATION_MAX)
+			# 隨機朝向，有一定機率偏向中央（增加「害敵人進場」機率）
+			var rand_angle = randf_range(0.0, TAU)
+			var chaos_dir  = Vector2(cos(rand_angle), sin(rand_angle))
+			# 30% 機率強制偏向中央方向
+			if randf() < 0.30:
+				chaos_dir = (MAP_CENTER - global_position).normalized()
+			_chaos_vel = chaos_dir * CHAOS_SPEED
 
 		queue_redraw()
 		return
@@ -142,7 +182,7 @@ func _draw() -> void:
 	draw_circle(Vector2.ZERO, RADIUS, Color(0.0, 0.0, 0.0, 0.38))
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
-	draw_set_transform(Vector2.ZERO, _spin_angle, Vector2.ONE)
+	draw_set_transform(Vector2.ZERO, _spin_angle, _display_scale)
 	draw_circle(Vector2.ZERO, RADIUS, COLOR_BODY)
 	draw_arc(Vector2.ZERO, RADIUS, 0.0, TAU, 40, COLOR_OUTLINE, 2.5)
 	draw_circle(Vector2(-7.0, -6.0), 4.5, Color.BLACK)
@@ -154,13 +194,18 @@ func _draw() -> void:
 # ── 供 projectile.gd 呼叫：被食物命中 ───────────
 
 func take_hit(hit_dir: Vector2 = Vector2.RIGHT, hit_speed: float = 420.0) -> void:
-	if _dying:
+	# 已在飛行中：跳過（連鎖已由 _chain_hit_bodies 保護）
+	# 混亂中允許重新被擊：讓被推進來的敵人可以再被打出去
+	if _dying and not _chaotic:
 		return
-	_dying = true
+	_dying  = true
 	_fading = false
+	_chaotic = false
 	_chain_hit_bodies.clear()
 
-	_hit_vel = hit_dir * hit_speed
+	# 加入隨機角度偏移（±40 度），讓撞飛方向無法完全預測
+	var spread = randf_range(-HIT_ANGLE_SPREAD, HIT_ANGLE_SPREAD)
+	_hit_vel = hit_dir.rotated(spread) * hit_speed
 
 	var sign = 1.0 if randf() > 0.5 else -1.0
 	_spin_speed = sign * randf_range(10.0, 18.0)   # 更快的旋轉，視覺更誇張
@@ -169,6 +214,14 @@ func take_hit(hit_dir: Vector2 = Vector2.RIGHT, hit_speed: float = 420.0) -> voi
 	var tw = create_tween()
 	tw.tween_property(self, "modulate", Color(3.5, 3.5, 3.5, 1.0), 0.03)   # 白閃
 	tw.tween_property(self, "modulate", Color(1.0, 0.35, 0.35, 1.0), 0.08) # 回到紅色，仍不透明
+
+	# 壓扁動畫（與玩家同一套 hit pipeline）
+	_display_scale = Vector2.ONE
+	var sq = create_tween()
+	sq.tween_property(self, "_display_scale", Vector2(1.90, 0.32), 0.04)
+	sq.tween_property(self, "_display_scale", Vector2(0.60, 1.60), 0.08)
+	sq.tween_property(self, "_display_scale", Vector2(1.15, 0.85), 0.08)
+	sq.tween_property(self, "_display_scale", Vector2(1.0,  1.0),  0.10)
 
 
 # ── 供滑地 / 外力使用 ─────────────────────────────

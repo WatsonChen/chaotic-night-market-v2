@@ -24,7 +24,7 @@ extends CharacterBody2D
 # ── 通用移動參數 ──────────────────────────────────
 const SPEED           = 200.0
 const RADIUS          = 24.0
-const KNOCKBACK_DECAY = 6.5
+const KNOCKBACK_DECAY = 3.8   # ↓ 從 6.5 降低：衰減更慢，飛得更遠
 const PUSH_DECAY      = 5.0
 const PUSH_MAX        = 280.0
 const STUN_DURATION   = 0.38
@@ -38,25 +38,34 @@ const ARENA_Y_MAX = 620.0
 const PROJECTILE_SCENE = preload("res://scenes/projectile.tscn")
 
 # ── 角色專屬攻擊參數（在 _ready 中依 player_index 填入）
-# P1 熱狗攤
-# ┌ shoot_cooldown    0.55    ← 調這裡改 P1 發射間隔（秒）
-# ├ proj_radius       16.0    ← 調這裡改 P1 子彈大小
-# ├ proj_speed        340.0   ← 調這裡改 P1 子彈速度
-# ├ proj_knockback    1400.0  ← 調這裡改 P1 友火擊退力
-# ├ proj_enemy_speed  600.0   ← 調這裡改 P1 打敵人飛出速度
-# ├ proj_hit_stop     4       ← 調這裡改 P1 hit stop 幀數
-# └ proj_color        橙黃色
+# ┌──────────────────────────────────────────────────────┐
+# │  P1 熱狗攤 — 大擊退 / 大事故型                        │
+# ├──────────────────────┬───────────────────────────────┤
+# │ shoot_cooldown  0.55 │ ← 發射間隔（秒）              │
+# │ proj_radius    18.0  │ ← 子彈視覺 & 碰撞半徑         │
+# │ proj_speed    320.0  │ ← 子彈飛行速度（px/s）        │
+# │ proj_knockback 2200  │ ← 友火擊退力（玩家）          │
+# │ proj_enemy_spd 1000  │ ← 打敵人飛出速度（px/s）      │
+# │ proj_hit_stop    5   │ ← 命中凍結幀數                │
+# └──────────────────────┴───────────────────────────────┘
 #
-# P2 珍奶攤
-# ┌ shoot_cooldown    0.48    ← 調這裡改 P2 burst 後冷卻（秒）
-# ├ burst_count       3       ← 調這裡改 P2 每次連射發數
-# ├ burst_delay       0.075   ← 調這裡改 P2 連射間隔（秒）
-# ├ proj_radius       7.0     ← 調這裡改 P2 子彈大小
-# ├ proj_speed        540.0   ← 調這裡改 P2 子彈速度
-# ├ proj_knockback    360.0   ← 調這裡改 P2 友火擊退力
-# ├ proj_enemy_speed  230.0   ← 調這裡改 P2 打敵人飛出速度
-# ├ proj_hit_stop     1       ← 調這裡改 P2 hit stop 幀數
-# └ proj_color        青藍色
+# ┌──────────────────────────────────────────────────────┐
+# │  P2 珍奶攤 — 高頻干擾 / 持續失控型                    │
+# ├──────────────────────┬───────────────────────────────┤
+# │ shoot_cooldown  0.42 │ ← burst 後冷卻（秒）          │
+# │ burst_count       3  │ ← 每次連射發數                │
+# │ burst_delay   0.075  │ ← 連射每發間隔（秒）          │
+# │ proj_radius     7.0  │ ← 子彈視覺 & 碰撞半徑         │
+# │ proj_speed    560.0  │ ← 子彈飛行速度（px/s）        │
+# │ proj_knockback  850  │ ← 友火擊退力（玩家）          │
+# │ proj_enemy_spd  500  │ ← 打敵人飛出速度（px/s）      │
+# │ proj_hit_stop    2   │ ← 命中凍結幀數                │
+# └──────────────────────┴───────────────────────────────┘
+#
+# 比值參考（P1 / P2）：
+#   敵人飛出速度  1000 / 500  = 2.0×   ← 符合設計目標
+#   友火擊退力   2200 / 850  = 2.6×   ← P2 burst×3 可追上
+#   子彈半徑     18.0 / 7.0  = 2.6×   ← P1 碰撞面積大
 
 var shoot_cooldown   : float = 0.30
 var burst_count      : int   = 1      # =1 表示單發（P1 模式）
@@ -92,26 +101,26 @@ func _ready() -> void:
 
 	# ── 依角色設定攻擊參數 ────────────────────────
 	if player_index == 1:
-		# P1 熱狗攤：大顆慢發、強擊退
+		# P1 熱狗攤：大顆慢發、強擊退 — 一發造成大事故
 		shoot_cooldown   = 0.55
 		burst_count      = 1
-		proj_radius      = 16.0
-		proj_speed       = 340.0
-		proj_knockback   = 1400.0
-		proj_enemy_speed = 600.0
-		proj_hit_stop    = 4
+		proj_radius      = 18.0
+		proj_speed       = 320.0
+		proj_knockback   = 2200.0
+		proj_enemy_speed = 1000.0
+		proj_hit_stop    = 5
 		proj_color       = Color(1.0, 0.75, 0.05)   # 橙黃
 
 	else:
-		# P2 珍奶攤：小顆快速連射 burst
-		shoot_cooldown   = 0.48   # burst 後冷卻
+		# P2 珍奶攤：小顆高頻連射 burst — 累積干擾造成失控
+		shoot_cooldown   = 0.42   # burst 後冷卻
 		burst_count      = 3
 		burst_delay      = 0.075  # 連射每發間隔
 		proj_radius      = 7.0
-		proj_speed       = 540.0
-		proj_knockback   = 360.0
-		proj_enemy_speed = 230.0
-		proj_hit_stop    = 1
+		proj_speed       = 560.0
+		proj_knockback   = 850.0
+		proj_enemy_speed = 500.0
+		proj_hit_stop    = 2
 		proj_color       = Color(0.35, 0.85, 1.0)   # 青藍
 
 	queue_redraw()
@@ -183,6 +192,16 @@ func _physics_process(delta: float) -> void:
 
 	velocity = dir * SPEED + _knockback + _push
 	move_and_slide()
+
+	# ── 擊退中高速撞飛敵人（連鎖效果）──────────────────
+	# 只有擊退速度夠大才偵測，避免正常移動誤觸
+	const KNOCKBACK_HIT_THRESH = 350.0
+	const KNOCKBACK_HIT_RANGE  = RADIUS + 28.0   # 玩家半徑 + 敵人半徑 + 緩衝
+	if _knockback.length() > KNOCKBACK_HIT_THRESH:
+		for enemy in get_tree().get_nodes_in_group("enemies"):
+			if global_position.distance_to(enemy.global_position) < KNOCKBACK_HIT_RANGE:
+				var fly_spd = _knockback.length() * 0.55
+				enemy.take_hit(_knockback.normalized(), fly_spd)
 
 	position.x = clamp(position.x, ARENA_X_MIN + RADIUS, ARENA_X_MAX - RADIUS)
 	position.y = clamp(position.y, ARENA_Y_MIN + RADIUS, ARENA_Y_MAX - RADIUS)
