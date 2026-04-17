@@ -25,6 +25,7 @@ extends CharacterBody2D
 const SPEED           = 200.0
 const RADIUS          = 24.0
 const KNOCKBACK_DECAY = 3.8   # ↓ 從 6.5 降低：衰減更慢，飛得更遠
+const KNOCKBACK_MAX   = 2800.0
 const PUSH_DECAY      = 5.0
 const PUSH_MAX        = 280.0
 const STUN_DURATION   = 0.38
@@ -89,6 +90,7 @@ var _push           : Vector2 = Vector2.ZERO
 var _stun_timer    : float   = 0.0
 var _spin_angle    : float   = 0.0
 var _display_scale : Vector2 = Vector2.ONE
+var _hit_reaction_tween : Tween
 
 # ── P2 burst 狀態 ─────────────────────────────────
 var _burst_remaining : int   = 0
@@ -159,6 +161,7 @@ func _process(delta: float) -> void:
 
 
 func _physics_process(delta: float) -> void:
+	_sanitize_player_state()
 	var dir = Vector2.ZERO
 
 	if _stun_timer > 0.0:
@@ -203,8 +206,7 @@ func _physics_process(delta: float) -> void:
 				var fly_spd = _knockback.length() * 0.55
 				enemy.take_hit(_knockback.normalized(), fly_spd, player_index)
 
-	position.x = clamp(position.x, ARENA_X_MIN + RADIUS, ARENA_X_MAX - RADIUS)
-	position.y = clamp(position.y, ARENA_Y_MIN + RADIUS, ARENA_Y_MAX - RADIUS)
+	_clamp_to_arena()
 
 	queue_redraw()
 
@@ -244,20 +246,23 @@ func apply_push(dir: Vector2, force: float) -> void:
 # ── 供 projectile.gd：友火擊退 + 昏厥 ───────────
 
 func apply_knockback(dir: Vector2, force: float) -> void:
-	_knockback += dir * force
+	_knockback = (_knockback + dir * force).limit_length(KNOCKBACK_MAX)
 	_start_hit_reaction()
 
 
 func _start_hit_reaction() -> void:
 	_stun_timer = STUN_DURATION
 	_spin_angle = 0.0
+	if _hit_reaction_tween != null:
+		_hit_reaction_tween.kill()
 
-	var tw = create_tween()
-	tw.tween_property(self, "_display_scale", Vector2(2.10, 0.28), 0.05)
-	tw.tween_property(self, "_display_scale", Vector2(0.55, 1.70), 0.09)
-	tw.tween_property(self, "_display_scale", Vector2(1.20, 0.82), 0.09)
-	tw.tween_property(self, "_display_scale", Vector2(0.90, 1.12), 0.07)
-	tw.tween_property(self, "_display_scale", Vector2(1.0,  1.0),  0.09)
+	_display_scale = Vector2.ONE
+	_hit_reaction_tween = create_tween()
+	_hit_reaction_tween.tween_property(self, "_display_scale", Vector2(2.10, 0.28), 0.05)
+	_hit_reaction_tween.tween_property(self, "_display_scale", Vector2(0.55, 1.70), 0.09)
+	_hit_reaction_tween.tween_property(self, "_display_scale", Vector2(1.20, 0.82), 0.09)
+	_hit_reaction_tween.tween_property(self, "_display_scale", Vector2(0.90, 1.12), 0.07)
+	_hit_reaction_tween.tween_property(self, "_display_scale", Vector2(1.0,  1.0),  0.09)
 
 
 # ── 發射單顆子彈（burst 和單發都走這裡）──────────
@@ -266,7 +271,9 @@ func _fire_projectile(dir: Vector2) -> void:
 	if dir == Vector2.ZERO:
 		return
 
-	var container = get_tree().current_scene.get_node_or_null("Projectiles")
+	var container = get_tree().current_scene.get_node_or_null("World/Projectiles")
+	if container == null:
+		container = get_tree().current_scene.get_node_or_null("Projectiles")
 	if container == null:
 		return
 
@@ -283,3 +290,29 @@ func _fire_projectile(dir: Vector2) -> void:
 
 	container.add_child(proj)
 	proj.global_position = global_position + dir.normalized() * (RADIUS + proj_radius + 4.0)
+
+
+func _clamp_to_arena() -> void:
+	position.x = clamp(position.x, ARENA_X_MIN + RADIUS, ARENA_X_MAX - RADIUS)
+	position.y = clamp(position.y, ARENA_Y_MIN + RADIUS, ARENA_Y_MAX - RADIUS)
+
+
+func _sanitize_player_state() -> void:
+	if not _is_vec2_finite(position) or not _is_vec2_finite(_knockback) or not _is_vec2_finite(_push):
+		position = Vector2(380.0, 360.0) if player_index == 1 else Vector2(900.0, 360.0)
+		_knockback = Vector2.ZERO
+		_push = Vector2.ZERO
+		_stun_timer = 0.0
+		_spin_angle = 0.0
+		_display_scale = Vector2.ONE
+		modulate = Color(1.0, 1.0, 1.0, 1.0)
+
+	_display_scale.x = clamp(_display_scale.x, 0.40, 2.40)
+	_display_scale.y = clamp(_display_scale.y, 0.40, 2.40)
+	_knockback = _knockback.limit_length(KNOCKBACK_MAX)
+	_push = _push.limit_length(PUSH_MAX)
+	_clamp_to_arena()
+
+
+func _is_vec2_finite(v: Vector2) -> bool:
+	return is_finite(v.x) and is_finite(v.y)

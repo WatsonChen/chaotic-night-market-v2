@@ -127,17 +127,16 @@ func _on_body_entered(body: Node) -> void:
 		body.apply_knockback(direction.normalized(), player_knockback)
 		_do_hit_stop_and_free(hit_stop_frames + 1)   # 打到玩家多 1 幀強調
 
-
 func _spawn_hit_effect(is_player: bool, scale: float) -> void:
 	var fx = Node2D.new()
 	fx.set_script(HIT_EFFECT_SCRIPT)
 	var parent = get_tree().current_scene.get_node_or_null("World")
 	if parent == null:
 		parent = get_tree().current_scene
-	parent.add_child(fx)
-	fx.global_position = global_position
 	fx.is_player_hit = is_player
 	fx.effect_scale  = scale * clamp(proj_radius / 12.0, 0.6, 1.6)  # 大子彈爆炸更大
+	parent.add_child(fx)
+	fx.global_position = global_position
 
 
 func _spawn_grease_puddle() -> void:

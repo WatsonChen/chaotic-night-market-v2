@@ -24,17 +24,17 @@ const MAP_CENTER = Vector2(640.0, 360.0)
 
 @export_group("Escalation Curve")
 @export var stage1_enemy_multiplier: float = 1.0
-@export var stage2_enemy_multiplier: float = 1.4
-@export var stage3_enemy_multiplier: float = 2.0
+@export var stage2_enemy_multiplier: float = 1.6
+@export var stage3_enemy_multiplier: float = 2.3
 @export var stage1_interval_multiplier: float = 1.0
-@export var stage2_interval_multiplier: float = 0.7
-@export var stage3_interval_multiplier: float = 0.45
+@export var stage2_interval_multiplier: float = 0.6
+@export var stage3_interval_multiplier: float = 0.35
 
 @export_group("Big Enemy Curve")
-@export var stage2_big_chance: float = 0.25
-@export var stage3_big_chance: float = 0.78
-@export var stage3_double_chance: float = 0.40
-@export var stage3_spike_big_chance: float = 0.65
+@export var stage2_big_chance: float = 0.40
+@export var stage3_big_chance: float = 0.92
+@export var stage3_double_chance: float = 0.55
+@export var stage3_spike_big_chance: float = 0.88
 
 @export_group("Stage 3 Spike Pressure")
 @export var spike_min_stage: int = 3
@@ -62,28 +62,70 @@ const MAP_CENTER = Vector2(640.0, 360.0)
 @export var grease_slip_accel: float = 980.0
 
 @export_group("Feedback")
-@export var stage2_message: String = "夜市開始失控..."
-@export var stage3_message: String = "已經完全失控！"
-@export var complaint_flash_strength: float = 0.12
-@export var complaint_flash_duration: float = 0.18
-@export var stage_flash_strength: float = 0.20
-@export var stage_flash_duration: float = 0.26
-@export var break_flash_strength: float = 0.20
+@export var stage2_message: String = "!! 夜市開始失控 !!"
+@export var stage3_message: String = "!! 已經完全失控 !!"
+@export var complaint_flash_strength: float = 0.16
+@export var complaint_flash_duration: float = 0.22
+@export var stage_flash_strength: float = 0.42
+@export var stage_flash_duration: float = 0.46
+@export var break_flash_strength: float = 0.58
 @export var break_flash_duration: float = 0.30
-@export var comeback_flash_strength: float = 0.26
-@export var comeback_flash_duration: float = 0.40
-@export var danger_shake_strength: float = 2.6
-@export var impact_shake_strength: float = 6.5
-@export var shake_decay: float = 14.0
+@export var comeback_flash_strength: float = 0.54
+@export var comeback_flash_duration: float = 0.56
+@export var danger_shake_strength: float = 3.8
+@export var impact_shake_strength: float = 8.5
+@export var stage_transition_shake_strength: float = 9.5
+@export var break_shake_strength: float = 14.0
+@export var comeback_shake_strength: float = 12.0
+@export var shake_decay: float = 12.0
+@export var stage_banner_alpha: float = 0.34
+@export var stage_banner_hold: float = 1.6
+@export var stage2_banner_color: Color = Color(1.0, 0.48, 0.08)
+@export var stage3_banner_color: Color = Color(1.0, 0.10, 0.08)
+
+@export_group("Ambient Tint")
+@export var stage2_tint_color: Color = Color(1.0, 0.48, 0.08)
+@export var stage2_tint_alpha: float = 0.07
+@export var stage3_tint_color: Color = Color(1.0, 0.08, 0.08)
+@export var stage3_tint_alpha: float = 0.14
+@export var stage3_tint_pulse: float = 0.05
+
+@export_group("Break Time FX")
+@export var break_hit_stop_scale: float = 0.04
+@export var break_hit_stop_duration: float = 0.06
+@export var break_slowmo_scale: float = 0.22
+@export var break_slowmo_duration: float = 0.34
+@export var break_slowmo_delay: float = 0.0
+@export var comeback_slowmo_scale: float = 0.56
+@export var comeback_slowmo_duration: float = 0.24
+
+@export_group("Break Burst")
+@export var break_burst_count: int = 3
+@export var break_burst_radius: float = 62.0
+@export var break_effect_scale: float = 2.45
+@export var break_secondary_effect_scale: float = 1.80
+@export var break_effect_particle_count: int = 20
+@export var break_effect_ring_count: int = 4
+@export var break_effect_fly_distance: float = 132.0
+@export var break_effect_ring_max: float = 120.0
+@export var break_effect_duration: float = 0.56
+
+@export_group("Comeback Burst")
+@export var comeback_burst_count: int = 5
+@export var comeback_burst_radius: float = 124.0
+@export var comeback_effect_scale: float = 2.15
+@export var comeback_secondary_effect_scale: float = 1.40
+@export var comeback_effect_particle_count: int = 24
+@export var comeback_effect_ring_count: int = 4
+@export var comeback_effect_fly_distance: float = 148.0
+@export var comeback_effect_ring_max: float = 138.0
+@export var comeback_effect_duration: float = 0.64
 
 @export_group("Comeback")
 @export var comeback_min_complaints: int = 8
 @export var comeback_complaint_reduction: int = 1
-@export var comeback_spawn_pause: float = 1.8
-@export var comeback_cooldown: float = 9.0
-@export var break_slowmo_scale: float = 0.35
-@export var break_slowmo_duration: float = 0.30
-@export var break_slowmo_delay: float = 0.06
+@export var comeback_spawn_pause: float = 2.0
+@export var comeback_cooldown: float = 10.0
 
 var complaint_count: int = 0
 var wave_count: int = 0
@@ -115,7 +157,9 @@ var final_label: Label
 var spike_label: Label
 var stage_label: Label
 var comeback_label: Label
+var ambient_overlay: ColorRect
 var flash_overlay: ColorRect
+var stage_banner: ColorRect
 
 var _flash_tween: Tween
 var _stage_notice_tween: Tween
@@ -413,24 +457,26 @@ func _on_big_enemy_armor_broken(break_position: Vector2) -> void:
 	if is_game_over:
 		return
 
-	_spawn_hit_effect(break_position, true, 1.65)
-	_play_screen_flash(Color(1.0, 0.95, 0.7), break_flash_strength, break_flash_duration)
-	_add_shake(impact_shake_strength)
-	food_court.trigger_break_pulse()
-	_start_break_slowmo()
+	var triggered_comeback = complaint_count >= comeback_min_complaints and _comeback_cooldown_left <= 0.0
+	_spawn_break_burst(break_position)
+	_play_screen_flash(Color(1.0, 1.0, 1.0), break_flash_strength, break_flash_duration)
+	_add_shake(break_shake_strength)
+	food_court.trigger_break_pulse(1.25)
+	_start_break_time_fx(triggered_comeback)
 
-	if complaint_count >= comeback_min_complaints and _comeback_cooldown_left <= 0.0:
-		_trigger_comeback()
+	if triggered_comeback:
+		_trigger_comeback(break_position)
 
 
-func _trigger_comeback() -> void:
+func _trigger_comeback(break_position: Vector2) -> void:
 	_comeback_cooldown_left = comeback_cooldown
 	_spawn_pause_timer = max(_spawn_pause_timer, comeback_spawn_pause)
 	_set_complaint_count(complaint_count - comeback_complaint_reduction, true)
-	_spawn_hit_effect(MAP_CENTER, true, 1.95)
-	_play_screen_flash(Color(1.0, 1.0, 0.82), comeback_flash_strength, comeback_flash_duration)
+	_spawn_comeback_burst(break_position)
+	_play_screen_flash(Color(1.0, 1.0, 0.92), comeback_flash_strength, comeback_flash_duration)
+	_add_shake(comeback_shake_strength)
 	_show_comeback_notice()
-	food_court.trigger_comeback_pulse()
+	food_court.trigger_comeback_pulse(1.35)
 
 
 func _set_complaint_count(new_value: int, play_bump: bool = true) -> void:
@@ -477,7 +523,7 @@ func _on_stage_changed(old_stage: int, new_stage: int) -> void:
 
 	_show_stage_transition(new_stage)
 	_play_screen_flash(_stage_flash_color(new_stage), stage_flash_strength, stage_flash_duration)
-	_add_shake(impact_shake_strength * 0.7)
+	_add_shake(stage_transition_shake_strength)
 
 
 func _show_stage_transition(stage: int) -> void:
@@ -490,16 +536,31 @@ func _show_stage_transition(stage: int) -> void:
 
 	stage_label.text = text
 	stage_label.add_theme_color_override("font_color", _stage_flash_color(stage))
+	stage_banner.color = Color(_stage_banner_color(stage).r, _stage_banner_color(stage).g, _stage_banner_color(stage).b, 0.0)
 	stage_label.modulate = Color(1, 1, 1, 0)
-	stage_label.scale = Vector2.ONE * 0.72
+	stage_label.scale = Vector2.ONE * 0.60
+	stage_banner.show()
 	stage_label.show()
 
 	_stage_notice_tween = create_tween()
-	_stage_notice_tween.tween_property(stage_label, "modulate", Color(1, 1, 1, 1), 0.16)
-	_stage_notice_tween.parallel().tween_property(stage_label, "scale", Vector2.ONE * 1.12, 0.16)
+	_stage_notice_tween.tween_property(stage_label, "modulate", Color(1, 1, 1, 1), 0.14)
+	_stage_notice_tween.parallel().tween_property(stage_label, "scale", Vector2.ONE * 1.16, 0.14)
+	_stage_notice_tween.parallel().tween_property(
+		stage_banner,
+		"color",
+		Color(_stage_banner_color(stage).r, _stage_banner_color(stage).g, _stage_banner_color(stage).b, stage_banner_alpha),
+		0.14
+	)
 	_stage_notice_tween.tween_property(stage_label, "scale", Vector2.ONE, 0.12)
-	_stage_notice_tween.tween_interval(1.5)
+	_stage_notice_tween.tween_interval(stage_banner_hold)
 	_stage_notice_tween.tween_property(stage_label, "modulate", Color(1, 1, 1, 0), 0.35)
+	_stage_notice_tween.parallel().tween_property(
+		stage_banner,
+		"color",
+		Color(_stage_banner_color(stage).r, _stage_banner_color(stage).g, _stage_banner_color(stage).b, 0.0),
+		0.35
+	)
+	_stage_notice_tween.tween_callback(stage_banner.hide)
 	_stage_notice_tween.tween_callback(stage_label.hide)
 
 
@@ -541,17 +602,144 @@ func _show_comeback_notice() -> void:
 
 func _stage_flash_color(stage: int) -> Color:
 	if stage >= 3:
-		return Color(1.0, 0.22, 0.16)
-	return Color(1.0, 0.55, 0.16)
+		return Color(1.0, 0.14, 0.12)
+	return Color(1.0, 0.44, 0.10)
 
 
-func _spawn_hit_effect(pos: Vector2, is_player_hit: bool, scale: float) -> void:
+func _stage_banner_color(stage: int) -> Color:
+	if stage >= 3:
+		return stage3_banner_color
+	return stage2_banner_color
+
+
+func _spawn_hit_effect(pos: Vector2, is_player_hit: bool, scale: float, overrides: Dictionary = {}) -> void:
 	var fx = Node2D.new()
 	fx.set_script(HIT_EFFECT_SCRIPT)
-	world_node.add_child(fx)
-	fx.global_position = pos
 	fx.is_player_hit = is_player_hit
 	fx.effect_scale = scale
+	if overrides.has("duration_override"):
+		fx.duration_override = overrides["duration_override"]
+	if overrides.has("particle_count_override"):
+		fx.particle_count_override = overrides["particle_count_override"]
+	if overrides.has("ring_count_override"):
+		fx.ring_count_override = overrides["ring_count_override"]
+	if overrides.has("fly_distance_override"):
+		fx.fly_distance_override = overrides["fly_distance_override"]
+	if overrides.has("ring_max_override"):
+		fx.ring_max_override = overrides["ring_max_override"]
+	if overrides.has("white_ring_boost"):
+		fx.white_ring_boost = overrides["white_ring_boost"]
+	if overrides.has("primary_color"):
+		fx.primary_color = overrides["primary_color"]
+	if overrides.has("secondary_color"):
+		fx.secondary_color = overrides["secondary_color"]
+	if overrides.has("accent_color"):
+		fx.accent_color = overrides["accent_color"]
+	if overrides.has("rainbow_mode"):
+		fx.rainbow_mode = overrides["rainbow_mode"]
+	if overrides.has("spin_speed"):
+		fx.spin_speed = overrides["spin_speed"]
+	if overrides.has("particle_size_ratio"):
+		fx.particle_size_ratio = overrides["particle_size_ratio"]
+	if overrides.has("ring_width_ratio"):
+		fx.ring_width_ratio = overrides["ring_width_ratio"]
+	if overrides.has("flash_window_ratio"):
+		fx.flash_window_ratio = overrides["flash_window_ratio"]
+	world_node.add_child(fx)
+	fx.global_position = pos
+
+
+func _spawn_break_burst(pos: Vector2) -> void:
+	_spawn_hit_effect(
+		pos,
+		true,
+		break_effect_scale,
+		{
+			"duration_override": break_effect_duration,
+			"particle_count_override": break_effect_particle_count,
+			"ring_count_override": break_effect_ring_count,
+			"fly_distance_override": break_effect_fly_distance,
+			"ring_max_override": break_effect_ring_max,
+			"white_ring_boost": 1.5,
+			"primary_color": Color(1.0, 0.78, 0.12),
+			"secondary_color": Color(1.0, 1.0, 1.0),
+			"accent_color": Color(1.0, 0.20, 0.06),
+			"particle_size_ratio": 1.2,
+			"ring_width_ratio": 1.3,
+		}
+	)
+
+	for _i in range(break_burst_count):
+		var angle = randf() * TAU
+		var offset = Vector2(cos(angle), sin(angle)) * randf_range(18.0, break_burst_radius)
+		_spawn_hit_effect(
+			pos + offset,
+			true,
+			break_secondary_effect_scale,
+			{
+				"duration_override": break_effect_duration * 0.82,
+				"particle_count_override": max(8, break_effect_particle_count - 8),
+				"ring_count_override": max(2, break_effect_ring_count - 1),
+				"fly_distance_override": break_effect_fly_distance * 0.72,
+				"ring_max_override": break_effect_ring_max * 0.74,
+				"white_ring_boost": 1.0,
+				"primary_color": Color(1.0, 0.88, 0.35),
+				"secondary_color": Color(1.0, 0.97, 0.88),
+				"accent_color": Color(1.0, 0.42, 0.12),
+			}
+		)
+
+
+func _spawn_comeback_burst(pos: Vector2) -> void:
+	_spawn_hit_effect(
+		MAP_CENTER,
+		true,
+		comeback_effect_scale,
+		{
+			"duration_override": comeback_effect_duration,
+			"particle_count_override": comeback_effect_particle_count,
+			"ring_count_override": comeback_effect_ring_count,
+			"fly_distance_override": comeback_effect_fly_distance,
+			"ring_max_override": comeback_effect_ring_max,
+			"white_ring_boost": 1.65,
+			"rainbow_mode": true,
+			"particle_size_ratio": 1.22,
+			"ring_width_ratio": 1.34,
+		}
+	)
+
+	for _i in range(comeback_burst_count):
+		var angle = randf() * TAU
+		var offset = Vector2(cos(angle), sin(angle)) * randf_range(20.0, comeback_burst_radius)
+		_spawn_hit_effect(
+			MAP_CENTER + offset,
+			true,
+			comeback_secondary_effect_scale,
+			{
+				"duration_override": comeback_effect_duration * 0.76,
+				"particle_count_override": max(10, comeback_effect_particle_count - 10),
+				"ring_count_override": max(2, comeback_effect_ring_count - 1),
+				"fly_distance_override": comeback_effect_fly_distance * 0.66,
+				"ring_max_override": comeback_effect_ring_max * 0.64,
+				"white_ring_boost": 1.15,
+				"rainbow_mode": true,
+			}
+		)
+
+	_spawn_hit_effect(
+		pos,
+		true,
+		comeback_secondary_effect_scale,
+		{
+			"duration_override": comeback_effect_duration * 0.72,
+			"particle_count_override": max(10, comeback_effect_particle_count - 8),
+			"ring_count_override": max(2, comeback_effect_ring_count - 1),
+			"fly_distance_override": comeback_effect_fly_distance * 0.58,
+			"ring_max_override": comeback_effect_ring_max * 0.58,
+			"white_ring_boost": 1.20,
+			"rainbow_mode": true,
+		}
+	)
 
 
 func _play_screen_flash(base_color: Color, strength: float, duration: float) -> void:
@@ -574,20 +762,31 @@ func _play_screen_flash(base_color: Color, strength: float, duration: float) -> 
 	)
 
 
-func _start_break_slowmo() -> void:
+func _start_break_time_fx(include_comeback_slowmo: bool) -> void:
 	_slowmo_token += 1
-	_run_break_slowmo(_slowmo_token)
+	_run_break_time_fx(_slowmo_token, include_comeback_slowmo)
 
 
-func _run_break_slowmo(token: int) -> void:
+func _run_break_time_fx(token: int, include_comeback_slowmo: bool) -> void:
 	await get_tree().create_timer(break_slowmo_delay, true, false, true).timeout
 	if not is_inside_tree() or token != _slowmo_token or is_game_over:
+		return
+
+	Engine.time_scale = break_hit_stop_scale
+	await get_tree().create_timer(break_hit_stop_duration, true, false, true).timeout
+	if not is_inside_tree() or token != _slowmo_token:
 		return
 
 	Engine.time_scale = break_slowmo_scale
 	await get_tree().create_timer(break_slowmo_duration, true, false, true).timeout
 	if not is_inside_tree() or token != _slowmo_token:
 		return
+
+	if include_comeback_slowmo:
+		Engine.time_scale = comeback_slowmo_scale
+		await get_tree().create_timer(comeback_slowmo_duration, true, false, true).timeout
+		if not is_inside_tree() or token != _slowmo_token:
+			return
 
 	if not is_game_over:
 		Engine.time_scale = 1.0
@@ -634,7 +833,7 @@ func _update_world_feedback(delta: float) -> void:
 
 	var danger_shake = 0.0
 	if complaint_count >= stage3_threshold and not is_game_over:
-		var pulse = 0.5 + 0.5 * sin(_feedback_time * 18.0)
+		var pulse = 0.5 + 0.5 * sin(_feedback_time * 20.0)
 		danger_shake = danger_shake_strength * (0.45 + pulse * 0.55)
 
 	var shake_strength = max(_impulse_shake, danger_shake)
@@ -658,6 +857,15 @@ func _sync_tension_feedback() -> void:
 		label_color = Color(1.0, 0.42, 0.35)
 	complaint_label.add_theme_color_override("font_color", label_color)
 
+	var ambient_color = Color(0.0, 0.0, 0.0, 0.0)
+	if _get_stage() == 2:
+		ambient_color = Color(stage2_tint_color.r, stage2_tint_color.g, stage2_tint_color.b, stage2_tint_alpha)
+	elif _get_stage() >= 3:
+		var pulse = 0.5 + 0.5 * sin(_feedback_time * 8.0)
+		var alpha = stage3_tint_alpha + pulse * stage3_tint_pulse
+		ambient_color = Color(stage3_tint_color.r, stage3_tint_color.g, stage3_tint_color.b, alpha)
+	ambient_overlay.color = ambient_color
+
 	food_court.complaint_count = complaint_count
 	food_court.current_stage = _get_stage()
 	food_court.danger_threshold = stage3_threshold
@@ -670,6 +878,12 @@ func _on_restart_pressed() -> void:
 
 
 func _setup_ui() -> void:
+	ambient_overlay = ColorRect.new()
+	ambient_overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+	ambient_overlay.color = Color(0.0, 0.0, 0.0, 0.0)
+	ambient_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ui_layer.add_child(ambient_overlay)
+
 	flash_overlay = ColorRect.new()
 	flash_overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
 	flash_overlay.color = Color(1.0, 1.0, 1.0, 0.0)
@@ -695,21 +909,29 @@ func _setup_ui() -> void:
 	spike_label.hide()
 	ui_layer.add_child(spike_label)
 
+	stage_banner = ColorRect.new()
+	stage_banner.position = Vector2(170, 78)
+	stage_banner.size = Vector2(940, 88)
+	stage_banner.color = Color(1.0, 0.45, 0.12, 0.0)
+	stage_banner.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	stage_banner.hide()
+	ui_layer.add_child(stage_banner)
+
 	stage_label = Label.new()
-	stage_label.position = Vector2(360, 108)
-	stage_label.size = Vector2(560, 54)
-	stage_label.pivot_offset = Vector2(280, 27)
+	stage_label.position = Vector2(170, 94)
+	stage_label.size = Vector2(940, 54)
+	stage_label.pivot_offset = Vector2(470, 27)
 	stage_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	stage_label.add_theme_font_size_override("font_size", 32)
+	stage_label.add_theme_font_size_override("font_size", 46)
 	stage_label.hide()
 	ui_layer.add_child(stage_label)
 
 	comeback_label = Label.new()
-	comeback_label.position = Vector2(280, 154)
-	comeback_label.size = Vector2(720, 50)
-	comeback_label.pivot_offset = Vector2(360, 25)
+	comeback_label.position = Vector2(160, 174)
+	comeback_label.size = Vector2(960, 52)
+	comeback_label.pivot_offset = Vector2(480, 26)
 	comeback_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	comeback_label.add_theme_font_size_override("font_size", 28)
+	comeback_label.add_theme_font_size_override("font_size", 34)
 	comeback_label.add_theme_color_override("font_color", Color(1.0, 0.95, 0.55))
 	comeback_label.hide()
 	ui_layer.add_child(comeback_label)
