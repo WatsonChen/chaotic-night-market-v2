@@ -37,6 +37,7 @@ const ARENA_Y_MIN = 100.0
 const ARENA_Y_MAX = 620.0
 
 const PROJECTILE_SCENE = preload("res://scenes/projectile.tscn")
+const MAP_CENTER       = Vector2(640.0, 360.0)   # 需與 main.gd 一致
 
 # ── 角色專屬攻擊參數（在 _ready 中依 player_index 填入）
 # ┌──────────────────────────────────────────────────────┐
@@ -67,6 +68,17 @@ const PROJECTILE_SCENE = preload("res://scenes/projectile.tscn")
 #   敵人飛出速度  1000 / 500  = 2.0×   ← 符合設計目標
 #   友火擊退力   2200 / 850  = 2.6×   ← P2 burst×3 可追上
 #   子彈半徑     18.0 / 7.0  = 2.6×   ← P1 碰撞面積大
+
+# ── 中央壓力區（Pressure Zone）─────────────────────
+# 數值由 main.gd 透過 zone_complaint_count 更新
+@export_group("Pressure Zone")
+@export var zone_radius         : float = 80.0   # ← 壓力區半徑（px，需與 food_court 的視覺圈一致）
+@export var zone_slow_threshold : int   = 5      # ← 客訴達此數啟動減速
+@export var zone_push_threshold : int   = 8      # ← 客訴達此數改為向外推力
+@export var zone_slow_factor    : float = 0.50   # ← 減速倍率（0.5 = 降為一半速度）
+@export var zone_push_force     : float = 150.0  # ← 向外推力（px/s）
+
+var zone_complaint_count : int = 0   # 由 main.gd 每幀設定，不要手動改
 
 var shoot_cooldown   : float = 0.30
 var burst_count      : int   = 1      # =1 表示單發（P1 模式）
@@ -193,7 +205,24 @@ func _physics_process(delta: float) -> void:
 	_knockback = _knockback.lerp(Vector2.ZERO, KNOCKBACK_DECAY * delta)
 	_push      = _push.lerp(Vector2.ZERO,      PUSH_DECAY      * delta)
 
-	velocity = dir * SPEED + _knockback + _push
+	# ── 中央壓力區效果 ────────────────────────────────
+	var zone_dist      = global_position.distance_to(MAP_CENTER)
+	var effective_speed = SPEED
+	if zone_dist < zone_radius:
+		if zone_complaint_count >= zone_push_threshold:
+			pass  # 推力在 velocity 算完後疊加
+		elif zone_complaint_count >= zone_slow_threshold:
+			effective_speed = SPEED * zone_slow_factor
+
+	velocity = dir * effective_speed + _knockback + _push
+
+	# 推力：在 zone 且達高壓階段，無論有無輸入都往外推
+	if zone_dist < zone_radius and zone_complaint_count >= zone_push_threshold:
+		var push_away = global_position - MAP_CENTER
+		if push_away.length_squared() < 0.01:
+			push_away = Vector2(randf_range(-1.0, 1.0), randf_range(-1.0, 1.0))
+		velocity += push_away.normalized() * zone_push_force
+
 	move_and_slide()
 
 	# ── 擊退中高速撞飛敵人（連鎖效果）──────────────────

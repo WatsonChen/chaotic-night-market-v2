@@ -871,6 +871,10 @@ func _sync_tension_feedback() -> void:
 	food_court.danger_threshold = stage3_threshold
 	food_court.spawn_pause_ratio = 0.0 if comeback_spawn_pause <= 0.0 else clamp(_spawn_pause_timer / comeback_spawn_pause, 0.0, 1.0)
 
+	# 中央壓力區：把最新客訴數推給所有玩家
+	for player in get_tree().get_nodes_in_group("players"):
+		player.zone_complaint_count = complaint_count
+
 
 func _on_restart_pressed() -> void:
 	Engine.time_scale = 1.0

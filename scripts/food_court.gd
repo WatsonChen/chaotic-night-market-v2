@@ -9,6 +9,15 @@ extends Node2D
 @export var depth_layers: int = 6
 @export var depth_step: float = 2.5
 
+@export_group("Pressure Zone Visual")
+@export var zone_ring_radius      : float = 80.0              # ← 需與 player.gd zone_radius 一致
+@export var zone_ring_width       : float = 3.0               # ← 光圈線寬（px）
+@export var zone_slow_threshold   : int   = 5                 # ← 顯示淡黃圈的客訴門檻
+@export var zone_push_threshold   : int   = 8                 # ← 改為紅色閃爍的客訴門檻
+@export var zone_slow_color       : Color = Color(1.0, 0.95, 0.45, 0.55)  # 淡黃
+@export var zone_push_color       : Color = Color(1.0, 0.18, 0.12, 0.90)  # 紅
+@export var zone_ring_flash_speed : float = 5.5               # ← 紅圈閃爍頻率（Hz）
+
 @export_group("Danger Feedback")
 @export var danger_fill_alpha: float = 0.26
 @export var danger_flash_speed: float = 10.5
@@ -137,3 +146,22 @@ func _draw() -> void:
 			16,
 			Color(1.0, 0.95, 0.4)
 		)
+
+	# ── 中央壓力區光圈 ────────────────────────────────
+	# 在食廣場外圍畫一圈提示圈，明確標示壓力邊界
+	if complaint_count >= zone_slow_threshold:
+		if complaint_count >= zone_push_threshold:
+			# 紅色閃爍圈（高壓：向外推力階段）
+			var flash = 0.5 + 0.5 * sin(_time * zone_ring_flash_speed)
+			var ring_alpha = zone_push_color.a * (0.55 + flash * 0.45)
+			draw_arc(Vector2.ZERO, zone_ring_radius, 0.0, TAU, 80,
+				Color(zone_push_color.r, zone_push_color.g, zone_push_color.b, ring_alpha),
+				zone_ring_width)
+			# 內側薄填充讓範圍更易讀
+			draw_arc(Vector2.ZERO, zone_ring_radius - 5.0, 0.0, TAU, 80,
+				Color(zone_push_color.r, zone_push_color.g, zone_push_color.b, ring_alpha * 0.25),
+				4.0)
+		else:
+			# 淡黃色靜態圈（中壓：減速階段）
+			draw_arc(Vector2.ZERO, zone_ring_radius, 0.0, TAU, 80,
+				zone_slow_color, zone_ring_width)
