@@ -158,8 +158,14 @@ func _do_hit_stop_and_free(frames: int) -> void:
 		_hit_stop_active = true
 		Engine.time_scale = 0.0
 		for _i in frames:
+			# scene 可能正在 reload：node 已離開樹，get_tree() 會回傳 null
+			if not is_inside_tree():
+				Engine.time_scale = 1.0
+				_hit_stop_active = false   # 重置 static，避免重開後 hit stop 永遠鎖死
+				return
 			await get_tree().process_frame
 		Engine.time_scale = 1.0
 		_hit_stop_active = false
 
-	queue_free()
+	if is_inside_tree():
+		queue_free()
