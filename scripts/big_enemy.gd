@@ -1,281 +1,276 @@
 extends CharacterBody2D
 
-# ===================================================
-# big_enemy.gd — 大型饕客
-#
-# 合作破防機制：
-#   第一擊 → 「踉蹌」狀態：速度降低、小幅後退、橙色脈衝外環提示
-#   第二擊（HIT_WINDOW 秒內）→ 「破防」：高速擊飛 + 大範圍連鎖
-#   超過時間窗口未能補刀 → 自動恢復正常行走
-#
-# ── 可調整參數（快速調整區）────────────────────────────
-#   BIG_RADIUS          體型半徑（px）           ← 目前 40
-#   SPEED               移動速度（px/s）          ← 目前 65
-#   PLAYER_PUSH_ACCEL   對玩家的推力加速度         ← 目前 1100
-#   HIT_WINDOW          合作擊退時間窗口（秒）     ← 目前 2.5
-#   STAGGER_SPEED_MULT  踉蹌期間速度倍率          ← 目前 0.35
-#   STAGGER_PUSH_RATIO  第一擊後退比例            ← 目前 0.22
-#   BREAK_SPEED_MULT    破防擊飛速度倍率          ← 目前 1.4
-#   BREAK_CHAIN_DIST    破防連鎖偵測距離（px）     ← 目前 92
-#   CHAIN_PLAYER_FORCE  破防連鎖對玩家擊退力      ← 目前 700
-# ===================================================
+const MAP_CENTER = Vector2(640.0, 360.0)
+const REACH_DIST = 36.0
 
-const MAP_CENTER    = Vector2(640.0, 360.0)
-const REACH_DIST    = 36.0
+@export_group("Body")
+@export var complaint_value: int = 2
+@export var body_radius: float = 46.0
+@export var speed: float = 78.0
+@export var player_push_accel: float = 1350.0
+@export var self_push_ratio: float = 0.22
+@export var push_radius: float = 108.0
+@export var sep_radius: float = 88.0
+@export var sep_force: float = 110.0
 
-# ── 體型與移動（快速調整區）──────────────────────
-const BIG_RADIUS         = 40.0    # ← 調這裡改體型
-const SPEED              = 65.0    # ← 調這裡改移動速度
-const PLAYER_PUSH_ACCEL  = 1100.0  # ← 調這裡改對玩家的推力
-const SELF_PUSH_RATIO    = 0.20
-const PUSH_RADIUS        = 96.0    # 推力偵測範圍（px）
-const SEP_RADIUS         = 80.0    # 同伴分離力範圍
-const SEP_FORCE          = 80.0    # 同伴分離力
+@export_group("Co-op Break Window")
+@export var hit_window: float = 2.5
+@export var armor_window_speed_multiplier: float = 0.88
+@export var armor_push_ratio: float = 0.12
+@export var armor_push_decay: float = 7.5
 
-# ── 合作破防（快速調整區）────────────────────────
-const HIT_WINDOW         = 2.5    # ← 調這裡改合作時間窗口（秒）
-const STAGGER_SPEED_MULT = 0.35   # ← 調這裡改踉蹌期間速度（0=完全停下）
-const STAGGER_PUSH_RATIO = 0.22   # ← 調這裡改第一擊後退比例
-const BREAK_SPEED_MULT   = 1.4    # ← 調這裡改破防擊飛速度倍率
+@export_group("Break Launch")
+@export var break_speed_multiplier: float = 1.65
+@export var break_min_launch_speed: float = 850.0
+@export var break_chain_dist: float = 138.0
+@export var break_chain_min_speed: float = 240.0
+@export var fly_decel: float = 1.05
+@export var fly_stop_thresh: float = 48.0
+@export var chain_speed_ratio: float = 0.84
+@export var chain_player_force: float = 820.0
+@export var break_angle_spread: float = 0.22
 
-# ── 擊飛與連鎖（快速調整區）─────────────────────
-const FLY_DECEL          = 1.0    # ← 調這裡改擊飛減速率（越小飛越遠）
-const FLY_STOP_THRESH    = 35.0   # ← 調這裡改飛停速度閾值（px/s）
-const BREAK_CHAIN_DIST   = BIG_RADIUS * 2.0 + 12.0   # 92 px
-const CHAIN_SPEED_RATIO  = 0.68   # ← 調這裡改連鎖速度遞減比例
-const CHAIN_PLAYER_FORCE = 700.0  # ← 調這裡改連鎖對玩家的擊退力
-const HIT_ANGLE_SPREAD   = 0.45   # 被擊方向隨機偏移（弧度，±26 度）
+@export_group("Visual")
+@export var body_color: Color = Color(0.60, 0.08, 0.10)
+@export var outline_color: Color = Color(1.0, 0.68, 0.24)
+@export var armor_color: Color = Color(1.0, 0.60, 0.12)
 
-# ── 外觀色彩 ─────────────────────────────────────
-const COLOR_BODY    = Color(0.50, 0.02, 0.72)   # 深紫
-const COLOR_OUTLINE = Color(0.82, 0.40, 1.00)   # 亮紫外框
-const COLOR_STAGGER = Color(1.00, 0.55, 0.00)   # 踉蹌時橙色
+signal reach_center(complaint_delta: int)
+signal armor_broken(break_position: Vector2)
 
-signal reach_center
+var _sep_vel: Vector2 = Vector2.ZERO
+var _external_vel: Vector2 = Vector2.ZERO
+var _impact_vel: Vector2 = Vector2.ZERO
 
-var _sep_vel      : Vector2 = Vector2.ZERO
-var _external_vel : Vector2 = Vector2.ZERO
+var _coop_window_active: bool = false
+var _coop_timer: float = 0.0
+var _coop_hitters: Dictionary = {}
+var _pulse_time: float = 0.0
 
-# ── 合作破防狀態 ─────────────────────────────────
-var _stagger       : bool    = false
-var _stagger_timer : float   = 0.0
-var _stagger_vel   : Vector2 = Vector2.ZERO   # 第一擊後退速度
-var _stagger_pulse : float   = 0.0            # 脈衝動畫計時
-
-# ── 擊飛狀態 ──────────────────────────────────────
-var _dying            : bool    = false
-var _hit_vel          : Vector2 = Vector2.ZERO
-var _fading           : bool    = false
-var _chain_hit_bodies : Array   = []
-var _spin_angle       : float   = 0.0
-var _spin_speed       : float   = 0.0
-
-# ── Juice：壓扁 ───────────────────────────────────
-var _display_scale : Vector2 = Vector2.ONE
+var _dying: bool = false
+var _hit_vel: Vector2 = Vector2.ZERO
+var _fading: bool = false
+var _chain_hit_bodies: Array = []
+var _spin_angle: float = 0.0
+var _spin_speed: float = 0.0
+var _display_scale: Vector2 = Vector2.ONE
 
 
 func _ready() -> void:
 	add_to_group("enemies")
+	add_to_group("big_enemies")
+
+	var shape_node = get_node_or_null("CollisionShape2D")
+	if shape_node and shape_node.shape:
+		shape_node.shape = shape_node.shape.duplicate()
+		shape_node.shape.radius = body_radius
+
 	queue_redraw()
 
 
 func _physics_process(delta: float) -> void:
-	# ── 擊飛中 ────────────────────────────────────
 	if _dying:
-		_hit_vel    = _hit_vel.lerp(Vector2.ZERO, FLY_DECEL * delta)
+		_hit_vel = _hit_vel.lerp(Vector2.ZERO, fly_decel * delta)
 		_spin_angle += _spin_speed * delta
-		_spin_speed  = _spin_speed * (1.0 - 3.0 * delta)
-		velocity     = _hit_vel
+		_spin_speed *= 1.0 - 3.0 * delta
+		velocity = _hit_vel
 		move_and_slide()
 
-		# 飛行撞到中央 → 直接進場
 		if global_position.distance_to(MAP_CENTER) <= REACH_DIST:
-			reach_center.emit()
+			reach_center.emit(complaint_value)
 			queue_free()
 			return
 
-		if _hit_vel.length() > BREAK_CHAIN_DIST:
+		if _hit_vel.length() > break_chain_min_speed:
 			_check_chain_collision()
 
-		if not _fading and _hit_vel.length() < FLY_STOP_THRESH:
+		if not _fading and _hit_vel.length() < fly_stop_thresh:
 			_fading = true
 			_start_fade()
 
 		queue_redraw()
 		return
 
-	# ── 踉蹌中 ────────────────────────────────────
-	if _stagger:
-		_stagger_timer -= delta
-		_stagger_pulse += delta * 7.0
-		_stagger_vel    = _stagger_vel.lerp(Vector2.ZERO, 6.0 * delta)
+	if _coop_window_active:
+		_coop_timer -= delta
+		_pulse_time += delta * 7.0
+		if _coop_timer <= 0.0:
+			_clear_coop_window()
 
-		var to_center = MAP_CENTER - global_position
-		if to_center.length() <= REACH_DIST:
-			reach_center.emit()
-			queue_free()
-			return
-
-		# 踉蹌期間仍朝中央緩行
-		velocity = to_center.normalized() * SPEED * STAGGER_SPEED_MULT + _stagger_vel
-		move_and_slide()
-
-		if _stagger_timer <= 0.0:
-			_stagger = false   # 時間窗口結束，恢復正常
-
-		queue_redraw()
-		return
-
-	# ── 正常移動 ──────────────────────────────────
 	var to_center = MAP_CENTER - global_position
-
 	if to_center.length() <= REACH_DIST:
-		reach_center.emit()
+		reach_center.emit(complaint_value)
 		queue_free()
 		return
 
-	_sep_vel      = Vector2.ZERO
+	_sep_vel = Vector2.ZERO
 	_external_vel = _external_vel.lerp(Vector2.ZERO, 5.0 * delta)
+	_impact_vel = _impact_vel.lerp(Vector2.ZERO, armor_push_decay * delta)
 
 	for other in get_tree().get_nodes_in_group("enemies"):
 		if other == self:
 			continue
-		var diff : Vector2 = global_position - other.global_position
-		var dist : float   = diff.length()
-		if dist < SEP_RADIUS and dist > 0.5:
-			_sep_vel += diff.normalized() * SEP_FORCE * (1.0 - dist / SEP_RADIUS)
+		var diff = global_position - other.global_position
+		var dist = diff.length()
+		if dist < sep_radius and dist > 0.5:
+			_sep_vel += diff.normalized() * sep_force * (1.0 - dist / sep_radius)
 
 	for player in get_tree().get_nodes_in_group("players"):
-		var diff : Vector2 = global_position - player.global_position
-		var dist : float   = diff.length()
-		if dist < PUSH_RADIUS and dist > 0.5:
-			var strength = (1.0 - dist / PUSH_RADIUS)
-			player.apply_push(-diff.normalized(), PLAYER_PUSH_ACCEL * strength * delta)
-			_sep_vel += diff.normalized() * PLAYER_PUSH_ACCEL * SELF_PUSH_RATIO * strength * delta
+		var diff = global_position - player.global_position
+		var dist = diff.length()
+		if dist < push_radius and dist > 0.5:
+			var strength = 1.0 - dist / push_radius
+			player.apply_push(-diff.normalized(), player_push_accel * strength * delta)
+			_sep_vel += diff.normalized() * player_push_accel * self_push_ratio * strength * delta
 
-	velocity = to_center.normalized() * SPEED + _sep_vel + _external_vel
+	var speed_mult = armor_window_speed_multiplier if _coop_window_active else 1.0
+	velocity = to_center.normalized() * speed * speed_mult + _sep_vel + _external_vel + _impact_vel
 	move_and_slide()
+	queue_redraw()
 
-
-# ── 連鎖碰撞（破防擊飛時）───────────────────────
 
 func _check_chain_collision() -> void:
-	for other in get_tree().get_nodes_in_group("enemies"):
-		if other == self or _chain_hit_bodies.has(other):
+	for other in get_tree().get_nodes_in_group("small_enemies"):
+		if _chain_hit_bodies.has(other):
 			continue
-		if global_position.distance_to(other.global_position) < BREAK_CHAIN_DIST:
+		if global_position.distance_to(other.global_position) < break_chain_dist:
 			_chain_hit_bodies.append(other)
-			other.take_hit(_hit_vel.normalized(), _hit_vel.length() * CHAIN_SPEED_RATIO)
+			other.take_hit(_hit_vel.normalized(), max(_hit_vel.length() * chain_speed_ratio, 520.0), 0)
 
 	for player in get_tree().get_nodes_in_group("players"):
 		if _chain_hit_bodies.has(player):
 			continue
-		if global_position.distance_to(player.global_position) < BIG_RADIUS + 24.0 + 8.0:
+		if global_position.distance_to(player.global_position) < body_radius + 32.0:
 			_chain_hit_bodies.append(player)
-			player.apply_knockback(_hit_vel.normalized(), CHAIN_PLAYER_FORCE)
+			player.apply_knockback(_hit_vel.normalized(), chain_player_force)
 
-
-# ── 淡出消失 ─────────────────────────────────────
 
 func _start_fade() -> void:
 	var tw = create_tween()
-	tw.tween_property(self, "modulate", Color(0.6, 0.0, 0.8, 0.0), 0.35)
+	tw.tween_property(self, "modulate", Color(0.9, 0.35, 0.1, 0.0), 0.34)
 	tw.tween_callback(queue_free)
 
 
 func _draw() -> void:
-	# 陰影
-	draw_set_transform(Vector2(4.0, BIG_RADIUS * 0.85), 0.0, Vector2(0.88, 0.18))
-	draw_circle(Vector2.ZERO, BIG_RADIUS, Color(0.0, 0.0, 0.0, 0.45))
+	draw_set_transform(Vector2(4.0, body_radius * 0.82), 0.0, Vector2(0.90, 0.20))
+	draw_circle(Vector2.ZERO, body_radius, Color(0.0, 0.0, 0.0, 0.48))
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
 	draw_set_transform(Vector2.ZERO, _spin_angle, _display_scale)
+	draw_circle(Vector2.ZERO, body_radius, body_color)
+	draw_arc(Vector2.ZERO, body_radius, 0.0, TAU, 64, outline_color, 4.0)
 
-	# 主體
-	draw_circle(Vector2.ZERO, BIG_RADIUS, COLOR_BODY)
+	if _coop_window_active:
+		var pulse = 0.45 + 0.55 * sin(_pulse_time)
+		draw_arc(
+			Vector2.ZERO,
+			body_radius + 8.0 + pulse * 6.0,
+			0.0,
+			TAU,
+			64,
+			Color(armor_color.r, armor_color.g, armor_color.b, 0.55 + pulse * 0.30),
+			3.0
+		)
 
-	if _stagger:
-		# 踉蹌：橙色脈衝外框 + 脈衝外環（提示「再一擊！」）
-		var pulse = 0.5 + 0.5 * sin(_stagger_pulse)
-		draw_arc(Vector2.ZERO, BIG_RADIUS, 0.0, TAU, 60,
-			COLOR_STAGGER.lerp(Color.WHITE, pulse * 0.35), 5.0)
-		# 脈衝外環：距離隨脈衝擴張，透明度淡入淡出
-		var ring_r = BIG_RADIUS + 6.0 + pulse * 9.0
-		draw_arc(Vector2.ZERO, ring_r, 0.0, TAU, 60,
-			Color(COLOR_STAGGER.r, COLOR_STAGGER.g, COLOR_STAGGER.b, pulse * 0.80), 2.5)
-	else:
-		draw_arc(Vector2.ZERO, BIG_RADIUS, 0.0, TAU, 60, COLOR_OUTLINE, 3.0)
+	for i in range(2):
+		var filled = i < _coop_hitters.size()
+		var marker_pos = Vector2(-12.0 + float(i) * 24.0, -body_radius - 12.0)
+		var marker_color = Color.WHITE if filled else Color(0.25, 0.12, 0.05, 0.85)
+		draw_circle(marker_pos, 5.0, marker_color)
+		draw_arc(marker_pos, 5.0, 0.0, TAU, 20, armor_color, 1.5)
 
-	# 眼睛（尺寸對應體型）
-	draw_circle(Vector2(-11.0, -8.0), 6.5, Color.BLACK)
-	draw_circle(Vector2( 11.0, -8.0), 6.5, Color.BLACK)
-	draw_arc(Vector2.ZERO, 15.0, deg_to_rad(20), deg_to_rad(160), 16, Color.BLACK, 2.5)
-
+	draw_circle(Vector2(-13.0, -9.0), 7.0, Color.BLACK)
+	draw_circle(Vector2(13.0, -9.0), 7.0, Color.BLACK)
+	draw_arc(Vector2.ZERO, 17.0, deg_to_rad(18), deg_to_rad(162), 18, Color.BLACK, 3.0)
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
 
-# ── 被命中 ───────────────────────────────────────
-
-func take_hit(hit_dir: Vector2 = Vector2.RIGHT, hit_speed: float = 420.0) -> void:
+func take_hit(hit_dir: Vector2 = Vector2.RIGHT, hit_speed: float = 420.0, attacker_id: int = 0) -> void:
 	if _dying:
 		return
 
-	var spread      = randf_range(-HIT_ANGLE_SPREAD, HIT_ANGLE_SPREAD)
-	var actual_dir  = hit_dir.rotated(spread)
+	var break_dir = _get_break_dir(hit_dir)
+	if attacker_id > 0:
+		_handle_player_hit(attacker_id, break_dir, hit_speed)
+		return
 
-	if _stagger:
-		# 第二擊 → 破防擊飛
-		_stagger       = false
-		_stagger_timer = 0.0
-		_do_break(actual_dir, hit_speed)
-	else:
-		# 第一擊 → 踉蹌
-		_do_stagger(actual_dir, hit_speed)
+	_apply_armor_hit(break_dir, hit_speed)
 
 
-func _do_stagger(hit_dir: Vector2, hit_speed: float) -> void:
-	_stagger       = true
-	_stagger_timer = HIT_WINDOW
-	_stagger_pulse = 0.0
-	# 小幅後退：讓玩家感受到命中有效果
-	_stagger_vel   = hit_dir * hit_speed * STAGGER_PUSH_RATIO
+func _handle_player_hit(attacker_id: int, break_dir: Vector2, hit_speed: float) -> void:
+	if not _coop_window_active:
+		_coop_window_active = true
+		_coop_timer = hit_window
+		_pulse_time = 0.0
+		_coop_hitters.clear()
+		_coop_hitters[attacker_id] = true
+		_apply_armor_hit(break_dir, hit_speed)
+		return
 
-	# 橙色閃光（有別於普通敵人的白閃，讓玩家知道「不一樣」）
+	if _coop_hitters.has(attacker_id):
+		_apply_armor_hit(break_dir, hit_speed)
+		return
+
+	_coop_hitters[attacker_id] = true
+	_do_break(break_dir, hit_speed)
+
+
+func _apply_armor_hit(break_dir: Vector2, hit_speed: float) -> void:
+	_impact_vel = break_dir * max(hit_speed * armor_push_ratio, 38.0)
+
 	var tw = create_tween()
-	tw.tween_property(self, "modulate", Color(3.0, 1.5, 0.2, 1.0), 0.03)
-	tw.tween_property(self, "modulate", Color(1.0, 1.0, 1.0, 1.0), 0.12)
+	tw.tween_property(self, "modulate", Color(3.0, 1.4, 0.25, 1.0), 0.03)
+	tw.tween_property(self, "modulate", Color(1.0, 1.0, 1.0, 1.0), 0.10)
 
-	# 輕度壓扁
 	_display_scale = Vector2.ONE
 	var sq = create_tween()
-	sq.tween_property(self, "_display_scale", Vector2(1.55, 0.52), 0.05)
-	sq.tween_property(self, "_display_scale", Vector2(0.75, 1.38), 0.09)
-	sq.tween_property(self, "_display_scale", Vector2(1.0,  1.0),  0.10)
+	sq.tween_property(self, "_display_scale", Vector2(1.35, 0.72), 0.04)
+	sq.tween_property(self, "_display_scale", Vector2(0.90, 1.16), 0.08)
+	sq.tween_property(self, "_display_scale", Vector2.ONE, 0.08)
 
 
-func _do_break(hit_dir: Vector2, hit_speed: float) -> void:
-	_dying            = true
-	_fading           = false
+func _do_break(break_dir: Vector2, hit_speed: float) -> void:
+	_clear_coop_window()
+	_dying = true
+	_fading = false
 	_chain_hit_bodies.clear()
+	_display_scale = Vector2.ONE
 
-	_hit_vel = hit_dir * hit_speed * BREAK_SPEED_MULT
+	var launch_speed = max(hit_speed * break_speed_multiplier, break_min_launch_speed)
+	var spread = randf_range(-break_angle_spread, break_angle_spread)
+	_hit_vel = break_dir.rotated(spread) * launch_speed
 
 	var sign = 1.0 if randf() > 0.5 else -1.0
-	_spin_speed = sign * randf_range(7.0, 13.0)
+	_spin_speed = sign * randf_range(12.0, 20.0)
 
-	# 強烈白閃（破防感）
 	var tw = create_tween()
-	tw.tween_property(self, "modulate", Color(5.0, 5.0, 5.0, 1.0), 0.02)
-	tw.tween_property(self, "modulate", Color(1.2, 0.4, 1.5, 1.0), 0.12)
+	tw.tween_property(self, "modulate", Color(3.8, 3.6, 2.4, 1.0), 0.04)
+	tw.tween_property(self, "modulate", Color(1.0, 0.55, 0.18, 1.0), 0.12)
 
-	# 誇張壓扁（比普通敵人更大）
-	_display_scale = Vector2.ONE
 	var sq = create_tween()
-	sq.tween_property(self, "_display_scale", Vector2(2.30, 0.22), 0.04)
-	sq.tween_property(self, "_display_scale", Vector2(0.50, 1.85), 0.09)
-	sq.tween_property(self, "_display_scale", Vector2(1.25, 0.80), 0.08)
-	sq.tween_property(self, "_display_scale", Vector2(1.0,  1.0),  0.10)
+	sq.tween_property(self, "_display_scale", Vector2(1.90, 0.34), 0.05)
+	sq.tween_property(self, "_display_scale", Vector2(0.62, 1.65), 0.08)
+	sq.tween_property(self, "_display_scale", Vector2(1.10, 0.90), 0.08)
+	sq.tween_property(self, "_display_scale", Vector2.ONE, 0.10)
+
+	armor_broken.emit(global_position)
+
+
+func _clear_coop_window() -> void:
+	_coop_window_active = false
+	_coop_timer = 0.0
+	_coop_hitters.clear()
+
+
+func _get_break_dir(hit_dir: Vector2) -> Vector2:
+	var outward = (global_position - MAP_CENTER).normalized()
+	if outward != Vector2.ZERO:
+		return outward
+
+	if hit_dir != Vector2.ZERO:
+		return -hit_dir.normalized()
+	return Vector2.RIGHT
 
 
 func apply_push(dir: Vector2, force: float) -> void:
-	_external_vel = (_external_vel + dir * force).limit_length(200.0)
+	_external_vel = (_external_vel + dir * force).limit_length(360.0)

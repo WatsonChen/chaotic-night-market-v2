@@ -45,8 +45,9 @@ const CHAOS_DURATION_MAX = 1.0    # 最長混亂時間（秒）
 const HIT_ANGLE_SPREAD   = 0.70   # 被擊方向隨機偏移（弧度，±40 度）
 
 @export var push_power : float = 1.0
+@export var complaint_value : int = 1
 
-signal reach_center
+signal reach_center(complaint_delta: int)
 
 var _sep_vel      : Vector2 = Vector2.ZERO
 var _external_vel : Vector2 = Vector2.ZERO
@@ -70,6 +71,7 @@ var _display_scale : Vector2 = Vector2.ONE
 
 func _ready() -> void:
 	add_to_group("enemies")
+	add_to_group("small_enemies")
 	queue_redraw()
 
 
@@ -96,7 +98,7 @@ func _physics_process(delta: float) -> void:
 
 		# 飛行中撞到中央 → 直接進場（讓玩家的攻擊可能害敵人進場）
 		if global_position.distance_to(MAP_CENTER) <= REACH_DIST:
-			reach_center.emit()
+			reach_center.emit(complaint_value)
 			queue_free()
 			return
 
@@ -124,7 +126,7 @@ func _physics_process(delta: float) -> void:
 	var to_center = MAP_CENTER - global_position
 
 	if to_center.length() <= REACH_DIST:
-		reach_center.emit()
+		reach_center.emit(complaint_value)
 		queue_free()
 		return
 
@@ -193,7 +195,7 @@ func _draw() -> void:
 
 # ── 供 projectile.gd 呼叫：被食物命中 ───────────
 
-func take_hit(hit_dir: Vector2 = Vector2.RIGHT, hit_speed: float = 420.0) -> void:
+func take_hit(hit_dir: Vector2 = Vector2.RIGHT, hit_speed: float = 420.0, _attacker_id: int = 0) -> void:
 	# 已在飛行中：跳過（連鎖已由 _chain_hit_bodies 保護）
 	# 混亂中允許重新被擊：讓被推進來的敵人可以再被打出去
 	if _dying and not _chaotic:

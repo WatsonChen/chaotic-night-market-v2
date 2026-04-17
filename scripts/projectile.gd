@@ -115,7 +115,10 @@ func _on_body_entered(body: Node) -> void:
 	if body.is_in_group("enemies"):
 		_dead = true
 		_spawn_hit_effect(false, 1.0)
-		body.take_hit(direction.normalized(), enemy_fly_speed)
+		var attacker_id = 0
+		if shooter != null:
+			attacker_id = int(shooter.get("player_index"))
+		body.take_hit(direction.normalized(), enemy_fly_speed, attacker_id)
 		_do_hit_stop_and_free(hit_stop_frames)
 
 	elif body.is_in_group("players"):
@@ -128,8 +131,11 @@ func _on_body_entered(body: Node) -> void:
 func _spawn_hit_effect(is_player: bool, scale: float) -> void:
 	var fx = Node2D.new()
 	fx.set_script(HIT_EFFECT_SCRIPT)
+	var parent = get_tree().current_scene.get_node_or_null("World")
+	if parent == null:
+		parent = get_tree().current_scene
+	parent.add_child(fx)
 	fx.global_position = global_position
-	get_tree().current_scene.add_child(fx)
 	fx.is_player_hit = is_player
 	fx.effect_scale  = scale * clamp(proj_radius / 12.0, 0.6, 1.6)  # 大子彈爆炸更大
 
@@ -137,8 +143,11 @@ func _spawn_hit_effect(is_player: bool, scale: float) -> void:
 func _spawn_grease_puddle() -> void:
 	var puddle = Node2D.new()
 	puddle.set_script(GREASE_PUDDLE_SCRIPT)
+	var parent = get_tree().current_scene.get_node_or_null("World")
+	if parent == null:
+		parent = get_tree().current_scene
+	parent.add_child(puddle)
 	puddle.global_position = global_position
-	get_tree().current_scene.add_child(puddle)
 
 
 func _do_hit_stop_and_free(frames: int) -> void:

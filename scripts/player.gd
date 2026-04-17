@@ -201,7 +201,7 @@ func _physics_process(delta: float) -> void:
 		for enemy in get_tree().get_nodes_in_group("enemies"):
 			if global_position.distance_to(enemy.global_position) < KNOCKBACK_HIT_RANGE:
 				var fly_spd = _knockback.length() * 0.55
-				enemy.take_hit(_knockback.normalized(), fly_spd)
+				enemy.take_hit(_knockback.normalized(), fly_spd, player_index)
 
 	position.x = clamp(position.x, ARENA_X_MIN + RADIUS, ARENA_X_MAX - RADIUS)
 	position.y = clamp(position.y, ARENA_Y_MIN + RADIUS, ARENA_Y_MAX - RADIUS)
