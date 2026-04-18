@@ -25,7 +25,6 @@ extends CharacterBody2D
 const SPEED           = 200.0
 const RADIUS          = 24.0
 const KNOCKBACK_DECAY = 3.8   # ↓ 從 6.5 降低：衰減更慢，飛得更遠
-const KNOCKBACK_MAX   = 2800.0
 const PUSH_DECAY      = 5.0
 const PUSH_MAX        = 280.0
 const STUN_DURATION   = 0.38
@@ -68,6 +67,20 @@ const MAP_CENTER       = Vector2(640.0, 360.0)   # 需與 main.gd 一致
 #   敵人飛出速度  1000 / 500  = 2.0×   ← 符合設計目標
 #   友火擊退力   2200 / 850  = 2.6×   ← P2 burst×3 可追上
 #   子彈半徑     18.0 / 7.0  = 2.6×   ← P1 碰撞面積大
+
+# ── Friendly Fire 放大參數 ────────────────────────
+@export_group("Friendly Fire")
+@export var ff_knockback_multiplier  : float   = 1.5    # ← 友火擊退力乘數（1.5 = +50%）
+@export var knockback_max            : float   = 4500.0 # ← 擊退速度上限（需 ≥ P1 knockback × multiplier）
+@export var ff_hit_stop_frames       : int     = 5      # ← 友火 hit stop 幀數（60fps×5 ≈ 0.08s）
+@export var ff_effect_scale          : float   = 1.5    # ← 友火爆炸特效倍率（150%）
+@export var ff_squash_x              : float   = 2.65   # ← 命中壓扁 X（越大越扁）
+@export var ff_squash_y              : float   = 0.18   # ← 命中壓扁 Y（越小越扁）
+@export var ff_stretch_x             : float   = 0.38   # ← 彈回拉伸 X（越小越細）
+@export var ff_stretch_y             : float   = 2.15   # ← 彈回拉伸 Y（越大越長）
+@export var ff_knockback_hit_thresh  : float   = 350.0  # ← 擊退速度超過此值才偵測碰撞（px/s）
+@export var ff_chain_enemy_ratio     : float   = 0.55   # ← 被擊退玩家撞飛敵人的速度比
+@export var ff_chain_player_ratio    : float   = 0.72   # ← 被擊退玩家撞飛隊友的速度比
 
 # ── 中央壓力區（Pressure Zone）─────────────────────
 # 數值由 main.gd 透過 zone_complaint_count 更新
@@ -120,7 +133,7 @@ func _ready() -> void:
 		burst_count      = 1
 		proj_radius      = 18.0
 		proj_speed       = 320.0
-		proj_knockback   = 2200.0
+		proj_knockback   = 2200.0 * ff_knockback_multiplier  # 預設 → 3300
 		proj_enemy_speed = 1000.0
 		proj_hit_stop    = 5
 		proj_color       = Color(1.0, 0.75, 0.05)   # 橙黃
@@ -132,7 +145,7 @@ func _ready() -> void:
 		burst_delay      = 0.075  # 連射每發間隔
 		proj_radius      = 7.0
 		proj_speed       = 560.0
-		proj_knockback   = 850.0
+		proj_knockback   = 850.0 * ff_knockback_multiplier  # 預設 → 1275
 		proj_enemy_speed = 500.0
 		proj_hit_stop    = 2
 		proj_color       = Color(0.35, 0.85, 1.0)   # 青藍
@@ -225,15 +238,19 @@ func _physics_process(delta: float) -> void:
 
 	move_and_slide()
 
-	# ── 擊退中高速撞飛敵人（連鎖效果）──────────────────
-	# 只有擊退速度夠大才偵測，避免正常移動誤觸
-	const KNOCKBACK_HIT_THRESH = 350.0
-	const KNOCKBACK_HIT_RANGE  = RADIUS + 28.0   # 玩家半徑 + 敵人半徑 + 緩衝
-	if _knockback.length() > KNOCKBACK_HIT_THRESH:
+	# ── 擊退中高速撞飛敵人 & 隊友（無限連鎖）──────────
+	const KNOCKBACK_HIT_RANGE = RADIUS + 28.0   # 玩家半徑 + 對方半徑 + 緩衝
+	if _knockback.length() > ff_knockback_hit_thresh:
+		# 撞飛敵人
 		for enemy in get_tree().get_nodes_in_group("enemies"):
 			if global_position.distance_to(enemy.global_position) < KNOCKBACK_HIT_RANGE:
-				var fly_spd = _knockback.length() * 0.55
-				enemy.take_hit(_knockback.normalized(), fly_spd, player_index)
+				enemy.take_hit(_knockback.normalized(), _knockback.length() * ff_chain_enemy_ratio, player_index)
+		# 撞飛隊友（新：玩家→玩家連鎖）
+		for other in get_tree().get_nodes_in_group("players"):
+			if other == self:
+				continue
+			if global_position.distance_to(other.global_position) < KNOCKBACK_HIT_RANGE:
+				other.apply_knockback(_knockback.normalized(), _knockback.length() * ff_chain_player_ratio)
 
 	_clamp_to_arena()
 
@@ -275,7 +292,7 @@ func apply_push(dir: Vector2, force: float) -> void:
 # ── 供 projectile.gd：友火擊退 + 昏厥 ───────────
 
 func apply_knockback(dir: Vector2, force: float) -> void:
-	_knockback = (_knockback + dir * force).limit_length(KNOCKBACK_MAX)
+	_knockback = (_knockback + dir * force).limit_length(knockback_max)
 	_start_hit_reaction()
 
 
@@ -287,8 +304,8 @@ func _start_hit_reaction() -> void:
 
 	_display_scale = Vector2.ONE
 	_hit_reaction_tween = create_tween()
-	_hit_reaction_tween.tween_property(self, "_display_scale", Vector2(2.10, 0.28), 0.05)
-	_hit_reaction_tween.tween_property(self, "_display_scale", Vector2(0.55, 1.70), 0.09)
+	_hit_reaction_tween.tween_property(self, "_display_scale", Vector2(ff_squash_x,  ff_squash_y),  0.05)
+	_hit_reaction_tween.tween_property(self, "_display_scale", Vector2(ff_stretch_x, ff_stretch_y), 0.09)
 	_hit_reaction_tween.tween_property(self, "_display_scale", Vector2(1.20, 0.82), 0.09)
 	_hit_reaction_tween.tween_property(self, "_display_scale", Vector2(0.90, 1.12), 0.07)
 	_hit_reaction_tween.tween_property(self, "_display_scale", Vector2(1.0,  1.0),  0.09)
@@ -312,10 +329,12 @@ func _fire_projectile(dir: Vector2) -> void:
 	proj.shooter         = self
 	proj.proj_radius     = proj_radius
 	proj.proj_speed      = proj_speed
-	proj.player_knockback = proj_knockback
-	proj.enemy_fly_speed  = proj_enemy_speed
-	proj.hit_stop_frames  = proj_hit_stop
-	proj.proj_color       = proj_color
+	proj.player_knockback    = proj_knockback
+	proj.enemy_fly_speed     = proj_enemy_speed
+	proj.hit_stop_frames     = proj_hit_stop
+	proj.proj_color          = proj_color
+	proj.ff_hit_stop_frames  = ff_hit_stop_frames
+	proj.ff_hit_effect_scale = ff_effect_scale
 
 	container.add_child(proj)
 	proj.global_position = global_position + dir.normalized() * (RADIUS + proj_radius + 4.0)
@@ -338,7 +357,7 @@ func _sanitize_player_state() -> void:
 
 	_display_scale.x = clamp(_display_scale.x, 0.40, 2.40)
 	_display_scale.y = clamp(_display_scale.y, 0.40, 2.40)
-	_knockback = _knockback.limit_length(KNOCKBACK_MAX)
+	_knockback = _knockback.limit_length(knockback_max)
 	_push = _push.limit_length(PUSH_MAX)
 	_clamp_to_arena()
 

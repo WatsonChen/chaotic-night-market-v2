@@ -16,12 +16,16 @@ extends Area2D
 # ===================================================
 
 # ── 可注入參數（預設值 = 原始規格，未設定時行為不變）
-var proj_radius      : float = 12.0
-var proj_speed       : float = 400.0
-var player_knockback : float = 950.0
-var enemy_fly_speed  : float = 420.0
-var hit_stop_frames  : int   = 2
-var proj_color       : Color = Color(1.0, 0.92, 0.1)
+var proj_radius          : float = 12.0
+var proj_speed           : float = 400.0
+var player_knockback     : float = 950.0
+var enemy_fly_speed      : float = 420.0
+var hit_stop_frames      : int   = 2
+var proj_color           : Color = Color(1.0, 0.92, 0.1)
+
+# ── 友火專屬（由 player.gd 注入）────────────────────
+var ff_hit_stop_frames   : int   = 5    # ← 友火 hit stop 幀數（≈0.08s @ 60fps）
+var ff_hit_effect_scale  : float = 1.5  # ← 友火爆炸特效倍率（150%）
 
 const LIFETIME           = 3.0
 const SHOOTER_GRACE_TIME = 0.15
@@ -123,9 +127,9 @@ func _on_body_entered(body: Node) -> void:
 
 	elif body.is_in_group("players"):
 		_dead = true
-		_spawn_hit_effect(true, 1.0)
+		_spawn_hit_effect(true, ff_hit_effect_scale)          # 友火特效放大
 		body.apply_knockback(direction.normalized(), player_knockback)
-		_do_hit_stop_and_free(hit_stop_frames + 1)   # 打到玩家多 1 幀強調
+		_do_hit_stop_and_free(ff_hit_stop_frames)              # 友火專屬 hit stop
 
 func _spawn_hit_effect(is_player: bool, scale: float) -> void:
 	var fx = Node2D.new()

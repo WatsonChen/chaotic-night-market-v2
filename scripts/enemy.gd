@@ -32,11 +32,14 @@ const SEP_RADIUS        = 56.0
 const SEP_FORCE         = 120.0
 
 # ── 擊飛參數（快速調整區）────────────────────────
-const FLY_DECEL          = 1.3    # ↓ 2.2 → 1.3：減速更慢，飛得更遠
-const FLY_STOP_THRESH    = 38.0   # ↓ 60 → 38：速度更低才停下
-const CHAIN_TOUCH_DIST   = RADIUS * 2.0 + 8.0   # 56px
-const CHAIN_SPEED_RATIO  = 0.72   # ↑ 0.62 → 0.72：連鎖保留更多速度
-const CHAIN_PLAYER_FORCE = 540.0  # ↑ 380 → 540：連鎖更用力推玩家
+const FLY_DECEL        = 1.3    # ↓ 2.2 → 1.3：減速更慢，飛得更遠
+const FLY_STOP_THRESH  = 38.0   # ↓ 60 → 38：速度更低才停下
+const CHAIN_TOUCH_DIST = RADIUS * 2.0 + 8.0   # 56px
+
+# ── 連鎖碰撞參數（export 可在 Inspector 即時調整）──
+@export_group("Chain Collision")
+@export var chain_speed_ratio  : float = 0.84   # ↑ 0.72 → 0.84：每跳保留更多速度，鏈更長
+@export var chain_player_ratio : float = 0.80   # NEW：敵人飛行速度 × 比例 → 玩家擊退力（速度越快推越狠）
 
 # ── 混亂移動參數 ─────────────────────────────────
 const CHAOS_SPEED        = 130.0  # 混亂狀態移動速度（px/s）
@@ -161,14 +164,15 @@ func _check_chain_collision() -> void:
 			continue
 		if global_position.distance_to(other.global_position) < CHAIN_TOUCH_DIST:
 			_chain_hit_bodies.append(other)
-			other.take_hit(_hit_vel.normalized(), _hit_vel.length() * CHAIN_SPEED_RATIO)
+			other.take_hit(_hit_vel.normalized(), _hit_vel.length() * chain_speed_ratio)
 
 	for player in get_tree().get_nodes_in_group("players"):
 		if _chain_hit_bodies.has(player):
 			continue
 		if global_position.distance_to(player.global_position) < RADIUS + 24.0 + 8.0:
 			_chain_hit_bodies.append(player)
-			player.apply_knockback(_hit_vel.normalized(), CHAIN_PLAYER_FORCE)
+			# 速度比例：飛得越快推玩家越狠（不再固定值）
+			player.apply_knockback(_hit_vel.normalized(), _hit_vel.length() * chain_player_ratio)
 
 
 # ── 淡出消失（速度停下後才呼叫）────────────────────
