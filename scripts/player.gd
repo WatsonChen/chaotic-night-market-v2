@@ -70,10 +70,10 @@ const MAP_CENTER       = Vector2(640.0, 360.0)   # 需與 main.gd 一致
 
 # ── Friendly Fire 放大參數 ────────────────────────
 @export_group("Friendly Fire")
-@export var ff_knockback_multiplier  : float   = 1.5    # ← 友火擊退力乘數（1.5 = +50%）
-@export var knockback_max            : float   = 4500.0 # ← 擊退速度上限（需 ≥ P1 knockback × multiplier）
+@export var ff_knockback_multiplier  : float   = 2.25   # ← 友火擊退力乘數（2.25 = 原 1.5 再 ×1.5）
+@export var knockback_max            : float   = 6000.0 # ← 擊退速度上限（需 ≥ P1 knockback × multiplier）
 @export var ff_hit_stop_frames       : int     = 5      # ← 友火 hit stop 幀數（60fps×5 ≈ 0.08s）
-@export var ff_effect_scale          : float   = 1.5    # ← 友火爆炸特效倍率（150%）
+@export var ff_effect_scale          : float   = 2.25   # ← 友火爆炸特效倍率（原 1.5 再 ×1.5 = 2.25）
 @export var ff_squash_x              : float   = 2.65   # ← 命中壓扁 X（越大越扁）
 @export var ff_squash_y              : float   = 0.18   # ← 命中壓扁 Y（越小越扁）
 @export var ff_stretch_x             : float   = 0.38   # ← 彈回拉伸 X（越小越細）
@@ -133,7 +133,7 @@ func _ready() -> void:
 		burst_count      = 1
 		proj_radius      = 18.0
 		proj_speed       = 320.0
-		proj_knockback   = 2200.0 * ff_knockback_multiplier  # 預設 → 3300
+		proj_knockback   = 2200.0 * ff_knockback_multiplier  # 預設 → 4950（2.25×）
 		proj_enemy_speed = 1000.0
 		proj_hit_stop    = 5
 		proj_color       = Color(1.0, 0.75, 0.05)   # 橙黃
@@ -145,7 +145,7 @@ func _ready() -> void:
 		burst_delay      = 0.075  # 連射每發間隔
 		proj_radius      = 7.0
 		proj_speed       = 560.0
-		proj_knockback   = 850.0 * ff_knockback_multiplier  # 預設 → 1275
+		proj_knockback   = 850.0 * ff_knockback_multiplier  # 預設 → 1912（2.25×）
 		proj_enemy_speed = 500.0
 		proj_hit_stop    = 2
 		proj_color       = Color(0.35, 0.85, 1.0)   # 青藍
