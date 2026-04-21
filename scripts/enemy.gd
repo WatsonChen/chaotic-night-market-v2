@@ -41,6 +41,11 @@ const CHAIN_TOUCH_DIST = RADIUS * 2.0 + 8.0   # 56px
 @export var chain_speed_ratio  : float = 0.84   # ↑ 0.72 → 0.84：每跳保留更多速度，鏈更長
 @export var chain_player_ratio : float = 0.80   # NEW：敵人飛行速度 × 比例 → 玩家擊退力（速度越快推越狠）
 
+# ── 安全限制（防止大量碰撞時速度爆棚或位置 NaN）──
+@export_group("Safety Limits")
+@export var max_fly_speed : float = 2800.0   # ← 擊飛速度上限（px/s）
+@export var min_chain_speed : float = 20.0  # ← 低於此速度不再觸發連鎖
+
 # ── 混亂移動參數 ─────────────────────────────────
 const CHAOS_SPEED        = 130.0  # 混亂狀態移動速度（px/s）
 const CHAOS_DURATION_MIN = 0.55   # 最短混亂時間（秒）
@@ -79,6 +84,11 @@ func _ready() -> void:
 
 
 func _physics_process(delta: float) -> void:
+	# ── 位置健全度檢查：NaN 或無限值 → 直接移除，避免瞬移 ──
+	if not _is_state_safe():
+		queue_free()
+		return
+
 	# ── 混亂移動（飛停後短暫失控）────────────────────
 	if _chaotic:
 		_chaos_timer -= delta
@@ -93,6 +103,7 @@ func _physics_process(delta: float) -> void:
 
 	# ── 擊飛中 ────────────────────────────────────
 	if _dying:
+		_hit_vel = _hit_vel.limit_length(max_fly_speed)   # ← 防止連鎖速度爆棚
 		_hit_vel    = _hit_vel.lerp(Vector2.ZERO, FLY_DECEL * delta)
 		_spin_angle += _spin_speed * delta
 		_spin_speed  = _spin_speed * (1.0 - 3.5 * delta)
@@ -159,20 +170,38 @@ func _physics_process(delta: float) -> void:
 # ── 連鎖碰撞偵測 ─────────────────────────────────
 
 func _check_chain_collision() -> void:
+	var spd = _hit_vel.length()
+	# 速度不足或方向 NaN → 跳過，避免傳入無效向量造成瞬移
+	if spd < min_chain_speed or not _hit_vel.is_finite():
+		return
+
+	var dir = _hit_vel / spd   # 手動正規化，避免 length ≈ 0 時 normalized() 回傳 NaN
+
 	for other in get_tree().get_nodes_in_group("enemies"):
 		if other == self or _chain_hit_bodies.has(other):
 			continue
 		if global_position.distance_to(other.global_position) < CHAIN_TOUCH_DIST:
 			_chain_hit_bodies.append(other)
-			other.take_hit(_hit_vel.normalized(), _hit_vel.length() * chain_speed_ratio)
+			other.take_hit(dir, spd * chain_speed_ratio)
 
 	for player in get_tree().get_nodes_in_group("players"):
 		if _chain_hit_bodies.has(player):
 			continue
 		if global_position.distance_to(player.global_position) < RADIUS + 24.0 + 8.0:
 			_chain_hit_bodies.append(player)
-			# 速度比例：飛得越快推玩家越狠（不再固定值）
-			player.apply_knockback(_hit_vel.normalized(), _hit_vel.length() * chain_player_ratio)
+			# 速度比例：飛得越快推玩家越狠
+			player.apply_knockback(dir, spd * chain_player_ratio)
+
+
+# ── 狀態健全度檢查（防 NaN 瞬移）────────────────────
+
+func _is_state_safe() -> bool:
+	if not is_finite(position.x) or not is_finite(position.y):
+		return false
+	if not _hit_vel.is_finite():
+		_hit_vel = Vector2.ZERO   # 嘗試自救：清零速度
+		return true               # 位置還好就繼續活著
+	return true
 
 
 # ── 淡出消失（速度停下後才呼叫）────────────────────
@@ -200,6 +229,12 @@ func _draw() -> void:
 # ── 供 projectile.gd 呼叫：被食物命中 ───────────
 
 func take_hit(hit_dir: Vector2 = Vector2.RIGHT, hit_speed: float = 420.0, _attacker_id: int = 0) -> void:
+	# ── 參數安全檢查：非有限值或零向量直接跳過，防止 NaN 傳播造成瞬移 ──
+	if not hit_dir.is_finite() or hit_dir.length_squared() < 0.0001:
+		return
+	if not is_finite(hit_speed) or hit_speed <= 0.0:
+		return
+
 	# 已在飛行中：跳過（連鎖已由 _chain_hit_bodies 保護）
 	# 混亂中允許重新被擊：讓被推進來的敵人可以再被打出去
 	if _dying and not _chaotic:
