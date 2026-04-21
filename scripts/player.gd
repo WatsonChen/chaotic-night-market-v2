@@ -6,11 +6,11 @@ extends CharacterBody2D
 # ── 角色設定（_ready 中依 player_index 初始化）──────
 #
 # P1 橘色「熱狗攤」
-#   移動：WASD  |  瞄準：滑鼠  |  射擊：左鍵
+#   移動：WASD  |  攻擊方向：最後移動方向  |  射擊：左鍵
 #   風格：單發大顆、強擊退、較慢節奏。一發出事。
 #
 # P2 藍色「珍奶攤」
-#   移動：IJKL  |  瞄準：移動方向  |  射擊：Space
+#   移動：IJKL  |  攻擊方向：最後移動方向  |  射擊：Space
 #   風格：快速 burst 連射（每次 3 發）、小顆弱推、刷畫面。
 #
 # ── 未來多機分離說明 ────────────────────────────────
@@ -171,8 +171,7 @@ func _process(delta: float) -> void:
 	# ── 一般射擊觸發 ──────────────────────────────
 	if player_index == 1:
 		if Input.is_action_pressed("p1_shoot") and _shoot_cd <= 0.0:
-			var aim = (get_global_mouse_position() - global_position).normalized()
-			_fire_projectile(aim)
+			_fire_projectile(_facing)
 			_shoot_cd = shoot_cooldown
 
 	else:
@@ -201,18 +200,14 @@ func _physics_process(delta: float) -> void:
 			if Input.is_action_pressed("p1_down"):  dir.y += 1.0
 			if Input.is_action_pressed("p1_left"):  dir.x -= 1.0
 			if Input.is_action_pressed("p1_right"): dir.x += 1.0
-			var to_mouse = get_global_mouse_position() - global_position
-			if to_mouse.length_squared() > 1.0:
-				_facing = to_mouse.normalized()
 		else:
 			if Input.is_action_pressed("p2_up"):    dir.y -= 1.0
 			if Input.is_action_pressed("p2_down"):  dir.y += 1.0
 			if Input.is_action_pressed("p2_left"):  dir.x -= 1.0
 			if Input.is_action_pressed("p2_right"): dir.x += 1.0
-			if dir != Vector2.ZERO:
-				_facing = dir.normalized()
 
 		if dir != Vector2.ZERO:
+			_facing = dir.normalized()
 			dir = dir.normalized()
 
 	_knockback = _knockback.lerp(Vector2.ZERO, KNOCKBACK_DECAY * delta)
