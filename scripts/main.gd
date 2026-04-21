@@ -1236,6 +1236,12 @@ func _get_hovered_card(mouse_pos: Vector2) -> int:
 
 # ── 輸入：突變選擇期間的 P1 點擊 / P2 鍵盤 ──────────
 func _unhandled_input(event: InputEvent) -> void:
+	# ── 除錯：F1 鍵立刻觸發突變選擇（測試用）──────────
+	if event is InputEventKey and event.pressed and not event.echo:
+		if event.keycode == KEY_F1 and not is_game_over and not _in_mutation:
+			_show_mutation_choice()
+			return
+
 	if not _in_mutation:
 		return
 
