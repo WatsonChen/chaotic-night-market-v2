@@ -264,7 +264,9 @@ var _mut_card_nl    : Array[Label]     = []   # 編號 labels
 
 func _ready() -> void:
 	# 突變系統需要在場景 pause 時仍繼續執行（倒數 + 輸入）
-	process_mode = Node.PROCESS_MODE_ALWAYS
+	# 只有 Main 本身設 ALWAYS；World 子樹設 PAUSABLE，pause 時敵人/玩家真的停下
+	process_mode            = Node.PROCESS_MODE_ALWAYS
+	world_node.process_mode = Node.PROCESS_MODE_PAUSABLE
 
 	randomize()
 	RenderingServer.set_default_clear_color(Color(0.08, 0.04, 0.12))

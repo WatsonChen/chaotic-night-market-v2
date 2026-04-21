@@ -248,7 +248,15 @@ func _physics_process(delta: float) -> void:
 			push_away = Vector2(randf_range(-1.0, 1.0), randf_range(-1.0, 1.0))
 		velocity += push_away.normalized() * zone_push_force
 
+	# velocity 上限：避免多重碰撞時 move_and_slide 產生 NaN
+	velocity = velocity.limit_length(8000.0)
 	move_and_slide()
+
+	# move_and_slide 後再次確認位置：多重 CharacterBody2D 碰撞有時會產生 NaN
+	if not _is_vec2_finite(position):
+		position  = Vector2(380.0, 360.0) if player_index == 1 else Vector2(900.0, 360.0)
+		_knockback = Vector2.ZERO
+		_push      = Vector2.ZERO
 
 	# ── 擊退中高速撞飛敵人 & 隊友（無限連鎖）──────────
 	const KNOCKBACK_HIT_RANGE = RADIUS + 28.0   # 玩家半徑 + 對方半徑 + 緩衝
@@ -298,12 +306,16 @@ func _draw() -> void:
 # ── 供 enemy.gd：饕客推擠 ────────────────────────
 
 func apply_push(dir: Vector2, force: float) -> void:
+	if not dir.is_finite() or not is_finite(force):
+		return   # 非有限值直接忽略，防止 NaN 污染
 	_push = (_push + dir * force).limit_length(PUSH_MAX)
 
 
 # ── 供 projectile.gd：友火擊退 + 昏厥 ───────────
 
 func apply_knockback(dir: Vector2, force: float) -> void:
+	if not dir.is_finite() or not is_finite(force):
+		return   # 非有限值直接忽略，防止 NaN 污染
 	_knockback = (_knockback + dir * force).limit_length(knockback_max)
 	_start_hit_reaction()
 
