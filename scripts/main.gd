@@ -147,11 +147,18 @@ const MAP_CENTER = Vector2(640.0, 360.0)
 @export var sprint_brightness_color: Color = Color(1.0, 0.97, 0.68)  # ← 畫面亮度 pulse 顏色
 @export var sprint_brightness_alpha_max: float = 0.07               # ← pulse 最高透明度
 @export var sprint_brightness_speed: float = 3.0                    # ← pulse 頻率（Hz）
-@export var sprint_label_text: String = "快了！撐住！"               # ← 提示文字
+@export var sprint_label_text: String = "最後衝刺！撐住！"           # ← 提示文字
+
+@export_group("Final Sprint Pressure")
+@export var sprint_wave_interval_multiplier : float = 0.15  # ← 衝刺期間波次間隔倍率（越小越快）
+@export var sprint_big_enemy_min           : int   = 1      # ← 進入衝刺時強制生成大型饕客最少數
+@export var sprint_big_enemy_max           : int   = 2      # ← 進入衝刺時強制生成大型饕客最多數
+@export var sprint_bonus_wave_count        : int   = 1      # ← 進入衝刺時立刻額外觸發的波次數
 
 var complaint_count: int = 0
 var wave_count: int = 0
 var is_game_over: bool = false
+var _in_sprint_mode: bool = false   # 最後 30 秒高壓衝刺旗標
 
 var _wave_timer: float = 0.0
 var _next_wave_in: float = 3.0
@@ -475,6 +482,8 @@ func _get_enemy_multiplier() -> float:
 
 
 func _get_interval_multiplier() -> float:
+	if _in_sprint_mode:
+		return sprint_wave_interval_multiplier   # 衝刺期間強制最快間隔
 	match _get_stage():
 		2:
 			return stage2_interval_multiplier
@@ -854,6 +863,11 @@ func _update_victory_timer(delta: float) -> void:
 	timer_label.text = "%d:%02d" % [mins, secs]
 
 	if _time_left <= warning_time:
+		# ── 首次進入衝刺：強制啟動高壓模式 ──────────────
+		if not _in_sprint_mode:
+			_in_sprint_mode = true
+			_enter_sprint_pressure()
+
 		# 顏色由 _update_sprint_visual() 負責，這裡只處理震動
 		_next_warning_shake -= delta
 		if _next_warning_shake <= 0.0:
@@ -864,6 +878,18 @@ func _update_victory_timer(delta: float) -> void:
 
 	if _time_left <= 0.0:
 		_trigger_win()
+
+
+func _enter_sprint_pressure() -> void:
+	# 立刻重置波次計時器，觸發連續快速波次
+	_wave_timer = _next_wave_in   # 讓下一幀立刻觸發波次
+	for _i in range(sprint_bonus_wave_count):
+		_build_wave_queue()
+
+	# 強制生成 1–2 隻大型饕客
+	var big_count = randi_range(sprint_big_enemy_min, sprint_big_enemy_max)
+	for _i in range(big_count):
+		_spawn_big_enemy_at(_edge_position(randi() % 4))
 
 
 func _trigger_win() -> void:
