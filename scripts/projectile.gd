@@ -123,6 +123,7 @@ func _on_body_entered(body: Node) -> void:
 		_dead = true
 		if always_spawn_grease:
 			_spawn_grease_puddle()   # 突變②：珍珠大爆發，命中必定滑地
+		_play_sfx("hit_enemy")
 		_spawn_hit_effect(false, 1.0)
 		var attacker_id = 0
 		if shooter != null:
@@ -132,9 +133,16 @@ func _on_body_entered(body: Node) -> void:
 
 	elif body.is_in_group("players"):
 		_dead = true
+		_play_sfx("hit_player")
 		_spawn_hit_effect(true, ff_hit_effect_scale)          # 友火特效放大
 		body.apply_knockback(direction.normalized(), player_knockback)
 		_do_hit_stop_and_free(ff_hit_stop_frames)              # 友火專屬 hit stop
+
+
+func _play_sfx(sfx_name: String) -> void:
+	var mgrs = get_tree().get_nodes_in_group("audio_manager")
+	if mgrs.size() > 0:
+		mgrs[0].play(sfx_name)
 
 func _spawn_hit_effect(is_player: bool, scale: float) -> void:
 	var fx = Node2D.new()

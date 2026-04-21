@@ -241,6 +241,9 @@ var vignette_right: ColorRect
 var sprint_overlay: ColorRect
 var sprint_label: Label
 
+# 音效管理器
+var audio_mgr : Node
+
 # ── 突變 UI 節點 ───────────────────────────────────
 var _mut_overlay    : ColorRect
 var _mut_title      : Label
@@ -270,6 +273,12 @@ func _ready() -> void:
 
 	randomize()
 	RenderingServer.set_default_clear_color(Color(0.08, 0.04, 0.12))
+
+	# 音效管理器（在 UI 之前建立，其他系統可立即使用）
+	audio_mgr = preload("res://scripts/audio_manager.gd").new()
+	audio_mgr.name = "AudioManager"
+	add_child(audio_mgr)
+
 	_setup_ui()
 	_setup_mutation_ui()
 	_spawn_players()
@@ -550,6 +559,7 @@ func _on_enemy_reach_center(complaint_delta: int = 1) -> void:
 	if is_game_over:
 		return
 
+	audio_mgr.play(audio_mgr.COMPLAINT)   # 客訴 +1 音效
 	_set_complaint_count(complaint_count + complaint_delta, true)
 	_play_screen_flash(Color(1.0, 0.18, 0.1), complaint_flash_strength, complaint_flash_duration)
 	_add_shake(impact_shake_strength * (0.45 if complaint_delta == 1 else 0.75))
@@ -562,6 +572,7 @@ func _on_big_enemy_armor_broken(break_position: Vector2) -> void:
 	if is_game_over:
 		return
 
+	audio_mgr.play(audio_mgr.BIG_BREAK)   # 大型破防音效
 	var triggered_comeback = complaint_count >= comeback_min_complaints and _comeback_cooldown_left <= 0.0
 	_spawn_break_burst(break_position)
 	_play_screen_flash(Color(1.0, 1.0, 1.0), break_flash_strength, break_flash_duration)
@@ -907,6 +918,7 @@ func _trigger_game_over() -> void:
 	_in_mutation = false
 	if _mut_overlay:
 		_mut_overlay.hide()
+	audio_mgr.play(audio_mgr.LOSE)   # 失敗音效
 	_clear_state_overlays()
 	final_label.text = "共 %d 次客訴\n撐到第 %d 波" % [complaint_count, wave_count]
 	game_over_panel.show()
@@ -938,6 +950,7 @@ func _update_victory_timer(delta: float) -> void:
 
 
 func _enter_sprint_pressure() -> void:
+	audio_mgr.set_sprint_mode(true)   # BGM 加速到 160 BPM
 	# 立刻重置波次計時器，觸發連續快速波次
 	_wave_timer = _next_wave_in   # 讓下一幀立刻觸發波次
 	for _i in range(sprint_bonus_wave_count):
@@ -959,6 +972,7 @@ func _trigger_win() -> void:
 	_in_mutation = false
 	if _mut_overlay:
 		_mut_overlay.hide()
+	audio_mgr.play(audio_mgr.WIN)   # 勝利音效
 	_clear_state_overlays()
 	win_final_label.text = "本場客訴：%d 次" % complaint_count
 	win_panel.show()
@@ -1188,6 +1202,7 @@ func _show_mutation_choice() -> void:
 	_mut_bar_fill.size.x = _mut_bar_bg.size.x
 	_mut_cd_label.text   = "%.1f 秒後自動隨機選擇" % mutation_choose_time
 	_mut_overlay.show()
+	audio_mgr.play(audio_mgr.MUTATION)   # 突變出現音效
 	get_tree().paused = true
 
 
