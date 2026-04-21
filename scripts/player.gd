@@ -153,13 +153,29 @@ func _ready() -> void:
 	queue_redraw()
 
 
+func _get_move_dir() -> Vector2:
+	# 回傳當前幀的原始移動方向（未正規化），供 _process 與 _physics_process 共用
+	var d := Vector2.ZERO
+	if player_index == 1:
+		if Input.is_action_pressed("p1_up"):    d.y -= 1.0
+		if Input.is_action_pressed("p1_down"):  d.y += 1.0
+		if Input.is_action_pressed("p1_left"):  d.x -= 1.0
+		if Input.is_action_pressed("p1_right"): d.x += 1.0
+	else:
+		if Input.is_action_pressed("p2_up"):    d.y -= 1.0
+		if Input.is_action_pressed("p2_down"):  d.y += 1.0
+		if Input.is_action_pressed("p2_left"):  d.x -= 1.0
+		if Input.is_action_pressed("p2_right"): d.x += 1.0
+	return d
+
+
 func _process(delta: float) -> void:
 	_shoot_cd -= delta
 
 	if _stun_timer > 0.0:
 		return
 
-	# ── P2 burst 連射處理 ──────────────────────────
+	# ── P2 burst 連射處理（移動中才繼續發射）──────────
 	if _burst_remaining > 0:
 		_burst_timer -= delta
 		if _burst_timer <= 0.0:
@@ -168,16 +184,23 @@ func _process(delta: float) -> void:
 			_burst_timer = burst_delay
 		return   # burst 進行中不接受新射擊指令
 
-	# ── 一般射擊觸發 ──────────────────────────────
+	# ── 自動射擊：有移動輸入才射擊，方向 = 當前移動方向 ──
+	var move_input := _get_move_dir()
+	if move_input == Vector2.ZERO:
+		return   # 靜止時停止射擊
+
+	var shoot_dir := move_input.normalized()
+
 	if player_index == 1:
-		if Input.is_action_pressed("p1_shoot") and _shoot_cd <= 0.0:
-			_fire_projectile(_facing)
+		# P1 熱狗攤：單發慢重
+		if _shoot_cd <= 0.0:
+			_fire_projectile(shoot_dir)
 			_shoot_cd = shoot_cooldown
 
 	else:
-		if Input.is_action_pressed("p2_shoot") and _shoot_cd <= 0.0:
-			# P2：立刻射第 1 發，剩餘 burst_count-1 發排入佇列
-			_burst_dir       = _facing
+		# P2 珍奶攤：burst 連射
+		if _shoot_cd <= 0.0:
+			_burst_dir       = shoot_dir
 			_fire_projectile(_burst_dir)
 			_burst_remaining = burst_count - 1
 			_burst_timer     = burst_delay
@@ -195,17 +218,7 @@ func _physics_process(delta: float) -> void:
 		if _stun_timer <= 0.0:
 			_spin_angle = 0.0
 	else:
-		if player_index == 1:
-			if Input.is_action_pressed("p1_up"):    dir.y -= 1.0
-			if Input.is_action_pressed("p1_down"):  dir.y += 1.0
-			if Input.is_action_pressed("p1_left"):  dir.x -= 1.0
-			if Input.is_action_pressed("p1_right"): dir.x += 1.0
-		else:
-			if Input.is_action_pressed("p2_up"):    dir.y -= 1.0
-			if Input.is_action_pressed("p2_down"):  dir.y += 1.0
-			if Input.is_action_pressed("p2_left"):  dir.x -= 1.0
-			if Input.is_action_pressed("p2_right"): dir.x += 1.0
-
+		dir = _get_move_dir()
 		if dir != Vector2.ZERO:
 			_facing = dir.normalized()
 			dir = dir.normalized()
