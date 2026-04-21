@@ -182,7 +182,7 @@ var _in_sprint_mode: bool = false   # 最後 30 秒高壓衝刺旗標
 var _mut_trigger_timer : float    = 0.0
 var _in_mutation       : bool     = false
 var _mut_countdown     : float    = 0.0
-var _mut_choices       : Array[int] = []
+var _mut_choices       : Array      = []   # 不用 Array[int]，slice() 回傳 plain Array
 var _mut_hovered       : int      = -1
 var _mut_p2_cursor     : int      = 0
 var _mut_speed_timer   : float    = 0.0
@@ -1238,7 +1238,7 @@ func _get_hovered_card(mouse_pos: Vector2) -> int:
 func _unhandled_input(event: InputEvent) -> void:
 	# ── 除錯：F1 鍵立刻觸發突變選擇（測試用）──────────
 	if event is InputEventKey and event.pressed and not event.echo:
-		if event.keycode == KEY_F1 and not is_game_over and not _in_mutation:
+		if event.keycode == KEY_F5 and not is_game_over and not _in_mutation:
 			_show_mutation_choice()
 			return
 
