@@ -27,6 +27,9 @@ var proj_color           : Color = Color(1.0, 0.92, 0.1)
 var ff_hit_stop_frames   : int   = 5    # ← 友火 hit stop 幀數（≈0.08s @ 60fps）
 var ff_hit_effect_scale  : float = 1.5  # ← 友火爆炸特效倍率（150%）
 
+# ── 突變系統 hook ─────────────────────────────────────
+var always_spawn_grease  : bool  = false  # ← 突變②：命中必定留下滑地
+
 const LIFETIME           = 3.0
 const SHOOTER_GRACE_TIME = 0.15
 const PUDDLE_SPAWN_TIME  = 1.0
@@ -118,6 +121,8 @@ func _on_body_entered(body: Node) -> void:
 
 	if body.is_in_group("enemies"):
 		_dead = true
+		if always_spawn_grease:
+			_spawn_grease_puddle()   # 突變②：珍珠大爆發，命中必定滑地
 		_spawn_hit_effect(false, 1.0)
 		var attacker_id = 0
 		if shooter != null:

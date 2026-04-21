@@ -93,6 +93,10 @@ const MAP_CENTER       = Vector2(640.0, 360.0)   # 需與 main.gd 一致
 
 var zone_complaint_count : int = 0   # 由 main.gd 每幀設定，不要手動改
 
+# ── 突變系統 hook（由 main.gd 寫入）────────────────
+var mutation_speed_mult : float = 1.0   # 突變③ 全場加速倍率
+var p2_always_grease    : bool  = false # 突變② 珍珠大爆發
+
 var shoot_cooldown   : float = 0.30
 var burst_count      : int   = 1      # =1 表示單發（P1 模式）
 var burst_delay      : float = 0.0
@@ -228,12 +232,12 @@ func _physics_process(delta: float) -> void:
 
 	# ── 中央壓力區效果 ────────────────────────────────
 	var zone_dist      = global_position.distance_to(MAP_CENTER)
-	var effective_speed = SPEED
+	var effective_speed = SPEED * mutation_speed_mult   # ← 突變③ 全場加速
 	if zone_dist < zone_radius:
 		if zone_complaint_count >= zone_push_threshold:
 			pass  # 推力在 velocity 算完後疊加
 		elif zone_complaint_count >= zone_slow_threshold:
-			effective_speed = SPEED * zone_slow_factor
+			effective_speed = SPEED * mutation_speed_mult * zone_slow_factor
 
 	velocity = dir * effective_speed + _knockback + _push
 
@@ -343,6 +347,10 @@ func _fire_projectile(dir: Vector2) -> void:
 	proj.proj_color          = proj_color
 	proj.ff_hit_stop_frames  = ff_hit_stop_frames
 	proj.ff_hit_effect_scale = ff_effect_scale
+
+	# 突變②：P2 珍珠大爆發 → 命中必定留下滑地
+	if player_index == 2:
+		proj.always_spawn_grease = p2_always_grease
 
 	container.add_child(proj)
 	proj.global_position = global_position + dir.normalized() * (RADIUS + proj_radius + 4.0)
