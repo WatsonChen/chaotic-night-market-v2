@@ -39,8 +39,7 @@ const CHAIN_TOUCH_DIST = RADIUS * 2.0 + 8.0   # 56px
 # ── 連鎖碰撞參數（export 可在 Inspector 即時調整）──
 @export_group("Chain Collision")
 @export var chain_speed_ratio  : float = 0.84   # ↑ 0.72 → 0.84：每跳保留更多速度，鏈更長
-@export var chain_player_ratio : float = 0.80   # NEW：敵人飛行速度 × 比例 → 玩家擊退力（速度越快推越狠）
-@export var max_fly_speed      : float = 1800.0 # ← 擊飛速度上限（防止連鎖爆炸導致 NaN 瞬移）
+@export var chain_player_ratio : float = 0.80   # 敵人飛行速度 × 比例 → 玩家擊退力
 
 # ── 安全限制（防止大量碰撞時速度爆棚或位置 NaN）──
 @export_group("Safety Limits")
@@ -107,9 +106,8 @@ func _physics_process(delta: float) -> void:
 
 	# ── 擊飛中 ────────────────────────────────────
 	if _dying:
-		_hit_vel = _hit_vel.limit_length(max_fly_speed)   # ← 防止連鎖速度爆棚
-		_hit_vel    = _hit_vel.lerp(Vector2.ZERO, FLY_DECEL * delta)
-		_hit_vel    = _hit_vel.limit_length(max_fly_speed)  # ← 速度上限，防連鎖爆炸
+		_hit_vel = _hit_vel.lerp(Vector2.ZERO, FLY_DECEL * delta)
+		_hit_vel = _hit_vel.limit_length(max_fly_speed)   # 速度上限，防連鎖爆炸
 		_spin_angle += _spin_speed * delta
 		_spin_speed  = _spin_speed * (1.0 - 3.5 * delta)
 		velocity     = _hit_vel
