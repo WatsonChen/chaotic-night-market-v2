@@ -651,6 +651,7 @@ func _set_complaint_count(new_value: int, play_bump: bool = true) -> void:
 		_on_stage_changed(old_stage, new_stage)
 
 	_sync_tension_feedback()
+	audio_mgr.update_complaints(complaint_count)   # BGM 階段連動
 
 
 func _update_complaint_label(play_bump: bool) -> void:

@@ -1,42 +1,55 @@
 extends Node
 
 # ===================================================
-# audio_manager.gd — 程序生成音效系統
+# audio_manager.gd — 音效 + 適應性 BGM
 #
-# 所有音效以 AudioStreamWAV + PCM 方式即時生成，不需外部檔案。
-# BGM 以 AudioStreamWAV 循環節拍生成，最後 30 秒自動加速。
+# ── BGM 階段（依客訴數自動切換）─────────────────────
+#   Phase 1  客訴 0–3   BPM 100，只有底鼓
+#   Phase 2  客訴 4–7   BPM 130，加入小鼓（snare）
+#   Phase 3  客訴 8–10  BPM 160，加入 hi-hat
+#   Phase 4  最後 30 秒  密集 16th notes + stab
 #
-# 外部呼叫範例：
-#   audio_mgr.play(AudioManager.HIT_PLAYER)
-#   audio_mgr.set_sprint_mode(true)
+# ── 切換方式 ─────────────────────────────────────────
+#   audio_mgr.update_complaints(count)   ← 每次客訴變化呼叫
+#   audio_mgr.set_sprint_mode(true)      ← 最後 30 秒觸發 Phase 4
+#
+# ── 可調整 BPM（export var）─────────────────────────
+#   bpm_phase_1   客訴 0–3   ← 目前 100
+#   bpm_phase_2   客訴 4–7   ← 目前 130
+#   bpm_phase_3   客訴 8–10  ← 目前 160
+#   bpm_final     Phase 4    ← 目前 160
+#   bgm_transition 淡入淡出秒數 ← 目前 1.0
 # ===================================================
 
 @export_group("Volume")
-@export var master_volume : float = 0.85   # ← 總音量（0-1）
+@export var master_volume : float = 0.85   # ← 總音量（0–1）
 @export var sfx_volume    : float = 0.80   # ← 音效音量
 @export var bgm_volume    : float = 0.40   # ← 背景音樂音量
 
-@export_group("BGM")
-@export var bgm_bpm_normal : float = 120.0  # ← 正常 BPM
-@export var bgm_bpm_sprint : float = 160.0  # ← 最後 30 秒 BPM
+@export_group("BGM BPM")
+@export var bpm_phase_1    : float = 100.0  # ← 客訴 0–3
+@export var bpm_phase_2    : float = 130.0  # ← 客訴 4–7
+@export var bpm_phase_3    : float = 160.0  # ← 客訴 8–10
+@export var bpm_final      : float = 160.0  # ← 最後 30 秒
+@export var bgm_transition : float = 1.0    # ← BPM / 音量淡入淡出（秒）
 
 @export_group("SFX Frequencies")
-@export var sfx_hit_player_freq : float = 800.0  # ← 命中玩家：頻率
-@export var sfx_hit_player_dur  : float = 0.10   # ← 命中玩家：時長
-@export var sfx_hit_enemy_freq  : float = 300.0  # ← 命中敵人：頻率
-@export var sfx_hit_enemy_dur   : float = 0.08   # ← 命中敵人：時長
-@export var sfx_big_break_f0    : float = 600.0  # ← 大型破防：起始頻率
-@export var sfx_big_break_f1    : float = 200.0  # ← 大型破防：結束頻率
-@export var sfx_big_break_dur   : float = 0.30   # ← 大型破防：時長
-@export var sfx_complaint_freq  : float = 200.0  # ← 客訴+1：頻率
-@export var sfx_complaint_dur   : float = 0.15   # ← 客訴+1：時長
-@export var sfx_mutation_f0     : float = 400.0  # ← 突變出現：起始頻率
-@export var sfx_mutation_f1     : float = 800.0  # ← 突變出現：結束頻率
-@export var sfx_mutation_dur    : float = 0.20   # ← 突變出現：時長
-@export var sfx_win_note_dur    : float = 0.18   # ← 勝利每音符時長
-@export var sfx_lose_note_dur   : float = 0.18   # ← 失敗每音符時長
+@export var sfx_hit_player_freq : float = 800.0
+@export var sfx_hit_player_dur  : float = 0.10
+@export var sfx_hit_enemy_freq  : float = 300.0
+@export var sfx_hit_enemy_dur   : float = 0.08
+@export var sfx_big_break_f0    : float = 600.0
+@export var sfx_big_break_f1    : float = 200.0
+@export var sfx_big_break_dur   : float = 0.30
+@export var sfx_complaint_freq  : float = 200.0
+@export var sfx_complaint_dur   : float = 0.15
+@export var sfx_mutation_f0     : float = 400.0
+@export var sfx_mutation_f1     : float = 800.0
+@export var sfx_mutation_dur    : float = 0.20
+@export var sfx_win_note_dur    : float = 0.18
+@export var sfx_lose_note_dur   : float = 0.18
 
-# ── SFX 名稱常數（外部使用這些字串）──────────────────
+# ── SFX 名稱常數 ──────────────────────────────────
 const HIT_PLAYER = "hit_player"
 const HIT_ENEMY  = "hit_enemy"
 const BIG_BREAK  = "big_break"
@@ -45,38 +58,122 @@ const MUTATION   = "mutation"
 const WIN        = "win"
 const LOSE       = "lose"
 
-const _SAMPLE_RATE = 44100
-const _POOL_SIZE   = 8
+const _SR        = 44100   # 取樣率
+const _POOL_SIZE = 8
 
+# ── Phase 閾值（鏡像 main.gd 的 stage 設定）──────
+const _PHASE2_AT = 4
+const _PHASE3_AT = 8
+
+# ── SFX ──────────────────────────────────────────
 var _sfx_streams : Dictionary = {}
 var _sfx_players : Array      = []
 var _sfx_idx     : int        = 0
 
-var _bgm_player    : AudioStreamPlayer
-var _bgm_in_sprint : bool = false
+# ── BGM 即時節拍器狀態 ────────────────────────────
+var _bpm         : float = 100.0   # 當前（平滑插值）BPM
+var _bpm_target  : float = 100.0
+var _bgm_phase   : int   = 1       # 1 / 2 / 3 / 4
+var _beat_acc    : float = 0.0     # 距下一個 16th note 的累積時間
+var _step        : int   = 0       # 0–15
+
+# ── 音量層（0.0–1.0，由 Tween 平滑控制）─────────
+var _vol_snare   : float = 0.0
+var _vol_hat     : float = 0.0
+var _vol_extra   : float = 0.0
+
+# ── BGM AudioStreamPlayer ─────────────────────────
+var _bgm_kick  : AudioStreamPlayer
+var _bgm_snare : AudioStreamPlayer
+var _bgm_hat   : AudioStreamPlayer
+var _bgm_extra : AudioStreamPlayer   # Phase 4 tension stab
 
 
 func _ready() -> void:
 	add_to_group("audio_manager")
 
-	# ── SFX 播放池 ────────────────────────────────────
+	# ── SFX 播放池 ────────────────────────────────
 	for _i in range(_POOL_SIZE):
 		var p := AudioStreamPlayer.new()
 		p.bus = "Master"
 		add_child(p)
 		_sfx_players.append(p)
 
-	# ── BGM 播放器 ────────────────────────────────────
-	_bgm_player     = AudioStreamPlayer.new()
-	_bgm_player.bus = "Master"
-	add_child(_bgm_player)
+	# ── BGM 鼓組 ──────────────────────────────────
+	_bgm_kick  = _mk_bgm_player(_gen_kick())
+	_bgm_snare = _mk_bgm_player(_gen_snare())
+	_bgm_hat   = _mk_bgm_player(_gen_hat())
+	_bgm_extra = _mk_bgm_player(_gen_stab())
 
-	# 生成所有音效並啟動 BGM
+	# ── 生成 SFX ──────────────────────────────────
 	_build_sfx()
-	_start_bgm(bgm_bpm_normal)
+
+	_bpm        = bpm_phase_1
+	_bpm_target = bpm_phase_1
 
 
-# ── 播放音效（外部呼叫）────────────────────────────────
+func _process(delta: float) -> void:
+	if Engine.time_scale == 0.0:
+		return   # hit stop 中暫停節拍器
+
+	# ── BPM 平滑插值 ──────────────────────────────
+	if abs(_bpm - _bpm_target) > 0.05:
+		_bpm = move_toward(_bpm, _bpm_target,
+			abs(_bpm_target - _bpm) / max(bgm_transition, 0.01) * delta)
+
+	# ── 節拍器 ─────────────────────────────────────
+	var sixteenth := 60.0 / (_bpm * 4.0)
+	_beat_acc += delta
+	while _beat_acc >= sixteenth:
+		_beat_acc -= sixteenth
+		_bgm_tick(_step)
+		_step = (_step + 1) % 16
+
+
+func _bgm_tick(s: int) -> void:
+	var base_vol := bgm_volume * master_volume
+
+	# ── Kick：拍 1, 3（step 0, 8）──────────────────
+	if s == 0 or s == 8:
+		_bgm_play(_bgm_kick, base_vol)
+
+	# ── Phase 4 附點踢鼓（step 10）─────────────────
+	if _bgm_phase >= 4 and _vol_extra > 0.01 and s == 10:
+		_bgm_play(_bgm_kick, base_vol * 0.42)
+
+	# ── Snare：拍 2, 4（step 4, 12）────────────────
+	if (s == 4 or s == 12) and _vol_snare > 0.01:
+		_bgm_play(_bgm_snare, base_vol * _vol_snare * 0.88)
+
+	# ── Hi-hat：8th notes（偶數 step）──────────────
+	if s % 2 == 0 and _vol_hat > 0.01:
+		_bgm_play(_bgm_hat, base_vol * _vol_hat * 0.65)
+
+	# ── Phase 4：16th off-beat hat + tension stab ──
+	if _bgm_phase >= 4 and _vol_extra > 0.01:
+		if s % 2 == 1:
+			_bgm_play(_bgm_hat, base_vol * _vol_extra * 0.34)
+		if s == 6 or s == 14:
+			_bgm_play(_bgm_extra, base_vol * _vol_extra * 0.90)
+
+
+func _bgm_play(player: AudioStreamPlayer, vol_linear: float) -> void:
+	player.volume_db = linear_to_db(maxf(vol_linear, 0.0001))
+	player.play()
+
+
+# ── 外部 API ─────────────────────────────────────
+
+## 每次客訴數變化時呼叫（main.gd 的 _set_complaint_count 觸發）
+func update_complaints(count: int) -> void:
+	var target := 1
+	if   count >= _PHASE3_AT: target = 3
+	elif count >= _PHASE2_AT: target = 2
+	if target > _bgm_phase:
+		_bgm_set_phase(target)
+
+
+## 播放一次性音效
 func play(sfx_name: String) -> void:
 	if not _sfx_streams.has(sfx_name):
 		return
@@ -87,16 +184,108 @@ func play(sfx_name: String) -> void:
 	p.play()
 
 
-# ── BGM 衝刺模式（最後 30 秒加速）──────────────────────
+## 最後 30 秒進入高壓衝刺模式（Phase 4）
 func set_sprint_mode(active: bool) -> void:
-	if active == _bgm_in_sprint:
+	if active:
+		_bgm_set_phase(4)
+
+
+# ── Phase 切換 ────────────────────────────────────
+
+func _bgm_set_phase(new_phase: int) -> void:
+	if _bgm_phase == new_phase:
 		return
-	_bgm_in_sprint = active
-	_start_bgm(bgm_bpm_sprint if active else bgm_bpm_normal)
+	_bgm_phase = new_phase
+
+	match new_phase:
+		1:
+			_bpm_target = bpm_phase_1
+			_tween_vols(0.0, 0.0, 0.0)
+		2:
+			_bpm_target = bpm_phase_2
+			_tween_vols(1.0, 0.0, 0.0)
+		3:
+			_bpm_target = bpm_phase_3
+			_tween_vols(1.0, 1.0, 0.0)
+		4:
+			_bpm_target = bpm_final
+			_tween_vols(1.0, 1.0, 1.0)
+
+
+func _tween_vols(snare: float, hat: float, extra: float) -> void:
+	var tw := create_tween().set_parallel(true)
+	tw.tween_property(self, "_vol_snare", snare, bgm_transition)
+	tw.tween_property(self, "_vol_hat",   hat,   bgm_transition)
+	tw.tween_property(self, "_vol_extra", extra, bgm_transition)
 
 
 # ═══════════════════════════════════════════════════
-#  內部：音效生成
+#  BGM 鼓組合成
+# ═══════════════════════════════════════════════════
+
+func _mk_bgm_player(stream: AudioStreamWAV) -> AudioStreamPlayer:
+	var p       := AudioStreamPlayer.new()
+	p.stream    = stream
+	p.volume_db = -80.0   # 初始靜音，由 _bgm_play 動態設定
+	p.bus       = "Master"
+	add_child(p)
+	return p
+
+
+func _gen_kick() -> AudioStreamWAV:
+	# 低頻正弦 + 音高快速下滑 → 踢鼓感
+	var n    := int(_SR * 0.22)
+	var buf  := PackedFloat32Array()
+	buf.resize(n)
+	for i in n:
+		var t     := float(i) / float(_SR)
+		var env   := exp(-t * 16.0)
+		var freq  := 55.0 + 110.0 * exp(-t * 32.0)
+		buf[i]     = sin(TAU * freq * t) * env * 0.90
+	return _to_wav(buf)
+
+
+func _gen_snare() -> AudioStreamWAV:
+	# 偽隨機 noise（多頻正弦乘積）+ 中頻底音
+	var n   := int(_SR * 0.14)
+	var buf := PackedFloat32Array()
+	buf.resize(n)
+	for i in n:
+		var t     := float(i) / float(_SR)
+		var env   := exp(-t * 22.0)
+		var noise := sin(float(i) * 1.9271) * sin(float(i) * 3.7193) * sin(float(i) * 7.3317)
+		var tone  := sin(TAU * 185.0 * t) * 0.28
+		buf[i]     = clampf((noise * 0.72 + tone) * env * 0.68, -1.0, 1.0)
+	return _to_wav(buf)
+
+
+func _gen_hat() -> AudioStreamWAV:
+	# 高頻 noise 極短衰減 → 清脆嗒聲
+	var n   := int(_SR * 0.04)
+	var buf := PackedFloat32Array()
+	buf.resize(n)
+	for i in n:
+		var t     := float(i) / float(_SR)
+		var env   := exp(-t * 90.0)
+		var noise := sin(float(i) * 13.719) * sin(float(i) * 17.381) * sin(float(i) * 23.147)
+		buf[i]     = clampf(noise * env * 0.42, -1.0, 1.0)
+	return _to_wav(buf)
+
+
+func _gen_stab() -> AudioStreamWAV:
+	# 短促雙頻 stab，Phase 4 緊張感
+	var n   := int(_SR * 0.07)
+	var buf := PackedFloat32Array()
+	buf.resize(n)
+	for i in n:
+		var t   := float(i) / float(_SR)
+		var env := exp(-t * 55.0)
+		buf[i]   = (sin(TAU * 440.0 * t) + sin(TAU * 587.0 * t) * 0.6) * env * 0.32
+	return _to_wav(buf)
+
+
+# ═══════════════════════════════════════════════════
+#  SFX 合成
 # ═══════════════════════════════════════════════════
 
 func _build_sfx() -> void:
@@ -111,20 +300,18 @@ func _build_sfx() -> void:
 	_sfx_streams[LOSE]       = _make_melody([600.0, 400.0, 200.0], sfx_lose_note_dur, 0.70)
 
 
-# ── 單音正弦 ─────────────────────────────────────────
 func _make_sine(freq: float, dur: float, vol: float) -> AudioStreamWAV:
-	var n   := int(_SAMPLE_RATE * dur)
+	var n   := int(_SR * dur)
 	var buf := PackedFloat32Array()
 	buf.resize(n)
 	for i in range(n):
 		var t  := float(i) / float(n)
-		buf[i]  = sin(TAU * freq * float(i) / _SAMPLE_RATE) * vol * (1.0 - t)
+		buf[i]  = sin(TAU * freq * float(i) / _SR) * vol * (1.0 - t)
 	return _to_wav(buf)
 
 
-# ── 掃頻（頻率從 f0 線性掃到 f1）────────────────────────
 func _make_sweep(f0: float, f1: float, dur: float, vol: float) -> AudioStreamWAV:
-	var n     := int(_SAMPLE_RATE * dur)
+	var n     := int(_SR * dur)
 	var buf   := PackedFloat32Array()
 	buf.resize(n)
 	var phase := 0.0
@@ -132,16 +319,15 @@ func _make_sweep(f0: float, f1: float, dur: float, vol: float) -> AudioStreamWAV
 		var t    := float(i) / float(n)
 		var freq := lerpf(f0, f1, t)
 		var env  := 1.0 - t
-		phase    += TAU * freq / _SAMPLE_RATE
+		phase    += TAU * freq / _SR
 		buf[i]    = sin(phase) * vol * env
 	return _to_wav(buf)
 
 
-# ── 旋律（多個音符依序播放，音符間有短暫靜音）──────────
 func _make_melody(freqs: Array, note_dur: float, vol: float) -> AudioStreamWAV:
 	var gap_dur := 0.04
-	var note_n  := int(_SAMPLE_RATE * note_dur)
-	var gap_n   := int(_SAMPLE_RATE * gap_dur)
+	var note_n  := int(_SR * note_dur)
+	var gap_n   := int(_SR * gap_dur)
 	var buf     := PackedFloat32Array()
 	buf.resize((note_n + gap_n) * freqs.size())
 	buf.fill(0.0)
@@ -149,87 +335,14 @@ func _make_melody(freqs: Array, note_dur: float, vol: float) -> AudioStreamWAV:
 	for freq in freqs:
 		for i in range(note_n):
 			var t    := float(i) / float(note_n)
-			var env  := sin(PI * t)                # 鐘形包絡，有 attack & decay
-			buf[idx]  = sin(TAU * float(freq) * float(i) / _SAMPLE_RATE) * vol * env
+			var env  := sin(PI * t)
+			buf[idx]  = sin(TAU * float(freq) * float(i) / _SR) * vol * env
 			idx      += 1
 		idx += gap_n
 	return _to_wav(buf)
 
 
-# ── BGM 節拍循環 ─────────────────────────────────────
-func _start_bgm(bpm: float) -> void:
-	var stream := _make_bgm(bpm)
-	_bgm_player.stream    = stream
-	_bgm_player.volume_db = linear_to_db(clampf(bgm_volume * master_volume, 0.001, 1.0))
-	_bgm_player.play()
-
-
-func _make_bgm(bpm: float) -> AudioStreamWAV:
-	var beat    := 60.0 / bpm
-	var measure := beat * 4.0
-	var loop    := measure * 2.0                   # 2 小節循環
-	var n       := int(_SAMPLE_RATE * loop)
-	var buf     := PackedFloat32Array()
-	buf.resize(n)
-	buf.fill(0.0)
-
-	# ── Kick：第 1、3 拍 ─────────────────────────────
-	for m in range(2):
-		for b in [0, 2]:
-			var t0    := int((m * measure + b * beat) * _SAMPLE_RATE)
-			var kick_n := int(0.20 * _SAMPLE_RATE)
-			var ph    := 0.0
-			for i in range(kick_n):
-				if t0 + i >= n:
-					break
-				var t    := float(i) / float(kick_n)
-				var env  := exp(-t * 16.0)
-				var freq := 110.0 * exp(-t * 9.0) + 50.0   # 音調下滑感
-				ph      += TAU * freq / _SAMPLE_RATE
-				buf[t0 + i] += sin(ph) * env * 0.75
-
-	# ── Hi-hat：每個 8th note ────────────────────────
-	for m in range(2):
-		for h in range(8):
-			var t0    := int((m * measure + h * beat * 0.5) * _SAMPLE_RATE)
-			var hat_n := int(0.035 * _SAMPLE_RATE)
-			for i in range(hat_n):
-				if t0 + i >= n:
-					break
-				var t   := float(i) / float(hat_n)
-				var env := exp(-t * 85.0)
-				var s   := sin(TAU * 7200.0  * float(i) / _SAMPLE_RATE) * 0.55
-				s       += sin(TAU * 10800.0 * float(i) / _SAMPLE_RATE) * 0.35
-				buf[t0 + i] += s * env * 0.28
-
-	# ── Bass pulse：每拍淡入淡出 ─────────────────────
-	for m in range(2):
-		for b in range(4):
-			var t0     := int((m * measure + b * beat) * _SAMPLE_RATE)
-			var bass_n := int(beat * 0.65 * _SAMPLE_RATE)
-			for i in range(bass_n):
-				if t0 + i >= n:
-					break
-				var t   := float(i) / float(bass_n)
-				var env := exp(-t * 5.0)
-				buf[t0 + i] += sin(TAU * 100.0 * float(i) / _SAMPLE_RATE) * env * 0.18
-
-	# 正規化至 0.88 峰值，避免破音
-	var peak := 0.0
-	for s in buf:
-		peak = maxf(peak, abs(s))
-	if peak > 0.001:
-		for i in range(n):
-			buf[i] = buf[i] / peak * 0.88
-
-	var wav := _to_wav(buf)
-	wav.loop_mode  = AudioStreamWAV.LOOP_FORWARD
-	wav.loop_begin = 0
-	wav.loop_end   = n
-	return wav
-
-
-# ── PCM 打包（PackedFloat32Array → AudioStreamWAV）──
+# ── PCM 打包 ──────────────────────────────────────
 func _to_wav(buf: PackedFloat32Array) -> AudioStreamWAV:
 	var n     := buf.size()
 	var bytes := PackedByteArray()
@@ -240,7 +353,7 @@ func _to_wav(buf: PackedFloat32Array) -> AudioStreamWAV:
 		bytes[i * 2 + 1] = (s >> 8) & 0xFF
 	var wav := AudioStreamWAV.new()
 	wav.format   = AudioStreamWAV.FORMAT_16_BITS
-	wav.mix_rate = _SAMPLE_RATE
+	wav.mix_rate = _SR
 	wav.stereo   = false
 	wav.data     = bytes
 	return wav
