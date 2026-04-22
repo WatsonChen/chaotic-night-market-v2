@@ -9,6 +9,15 @@ const HIT_EFFECT_SCRIPT = preload("res://scripts/hit_effect.gd")
 const ARENA = Rect2(160.0, 100.0, 960.0, 520.0)
 const MAP_CENTER = Vector2(640.0, 360.0)
 
+# ── UI 文字常數（所有顯示文字集中管理）──────────────────
+const TXT_WIN_TITLE    = "你們撐過去了！"
+const TXT_LOSE_TITLE   = "夜市崩潰了！"
+const TXT_REPLAY       = "再玩一次"
+const TXT_BACK_MENU    = "回主選單"
+const TXT_PAUSE_TITLE  = "暫停"
+const TXT_RESUME       = "繼續遊戲"
+const TXT_COUNTDOWN_GO = "GO！"
+
 @export_group("Complaint Stages")
 @export var max_complaints: int = 10
 @export var stage2_threshold: int = 4
@@ -133,6 +142,16 @@ const MAP_CENTER = Vector2(640.0, 360.0)
 @export var warning_shake_strength: float = 2.0  # ← 警告期間每次震動強度
 @export var warning_shake_interval: float = 3.5  # ← 震動間隔（秒）
 
+@export_group("Sprint Pressure")
+@export var sprint_wave_interval_min   : float = 1.8   # ← 衝刺期間最短波次間隔（秒）
+@export var sprint_wave_interval_max   : float = 3.2   # ← 衝刺期間最長波次間隔（秒）
+@export var sprint_enemy_multiplier    : float = 3.0   # ← 衝刺期間每波敵人倍數
+@export var sprint_interval_multiplier : float = 0.28  # ← 衝刺期間波次間隔乘數
+@export var sprint_big_spawn_min       : int   = 1     # ← 衝刺開始時強制生成大型饕客最少數
+@export var sprint_big_spawn_max       : int   = 2     # ← 衝刺開始時強制生成大型饕客最多數
+@export var sprint_force_spike         : bool  = true  # ← 衝刺期間是否強制維持爆發波
+@export var sprint_banner_message      : String = "!! 最後衝刺 !!"  # ← 衝刺開始時顯示的文字
+
 @export_group("Danger Vignette")
 @export var vignette_danger_color: Color = Color(1.0, 0.06, 0.06)  # ← 邊緣紅色
 @export var vignette_edge_size: float = 90.0                        # ← 邊緣厚度（px）
@@ -189,6 +208,9 @@ var _mut_speed_timer   : float    = 0.0
 var _mut_big_timer     : float    = 0.0
 var _mut_big_active    : bool     = false
 
+var _countdown_active: bool = true   # 遊戲開始倒數旗標
+var _paused: bool = false            # 玩家主動暫停旗標
+
 var _wave_timer: float = 0.0
 var _next_wave_in: float = 3.0
 var _spawn_queue: Array[Vector2] = []
@@ -227,6 +249,7 @@ var _complaint_bump_tween: Tween
 
 var _time_left: float = 0.0
 var _next_warning_shake: float = 0.0
+var _is_sprint: bool = false   # 最後 warning_time 秒進入高壓衝刺
 var timer_label: Label
 var win_panel: Panel
 var win_final_label: Label
@@ -240,6 +263,10 @@ var vignette_right: ColorRect
 # 衝刺效果
 var sprint_overlay: ColorRect
 var sprint_label: Label
+
+# 開始倒數 & 暫停
+var countdown_label: Label
+var pause_panel: Panel
 
 # 音效管理器
 var audio_mgr : Node
@@ -282,11 +309,13 @@ func _ready() -> void:
 	_setup_ui()
 	_setup_mutation_ui()
 	_spawn_players()
-	_reset_spawn_timers()
+	_set_players_frozen(true)   # 倒數期間鎖定玩家
+	# _reset_spawn_timers() 移至倒數結束後，避免波次計時在倒數中累積
 	_time_left = game_duration
 	_next_warning_shake = warning_shake_interval
 	_sync_tension_feedback()
 	queue_redraw()
+	_run_countdown()            # 啟動開始倒數協程
 
 
 func _process(delta: float) -> void:
@@ -298,7 +327,7 @@ func _process(delta: float) -> void:
 	# 突變系統（paused 期間仍執行，因 PROCESS_MODE_ALWAYS）
 	_update_mutation_system(delta)
 
-	if is_game_over or _in_mutation:
+	if is_game_over or _in_mutation or _countdown_active:
 		return
 
 	_update_victory_timer(delta)
@@ -314,6 +343,11 @@ func _process(delta: float) -> void:
 	_update_spike_timer(delta)
 	_update_grease_timer(delta)
 	_update_spawn_queue(delta)
+
+
+func _input(event: InputEvent) -> void:
+	if event.is_action_pressed("ui_cancel") and not is_game_over and not _countdown_active:
+		_toggle_pause()
 
 
 func _reset_spawn_timers() -> void:
@@ -335,13 +369,23 @@ func _update_wave_timer(delta: float) -> void:
 		return
 
 	_wave_timer = 0.0
-	_next_wave_in = randf_range(wave_interval_min, wave_interval_max) * _get_interval_multiplier()
+	if _is_sprint:
+		_next_wave_in = randf_range(sprint_wave_interval_min, sprint_wave_interval_max)
+	else:
+		_next_wave_in = randf_range(wave_interval_min, wave_interval_max) * _get_interval_multiplier()
 	wave_count += 1
 	_build_wave_queue()
 
 
 func _update_spike_timer(delta: float) -> void:
-	if _get_stage() < spike_min_stage:
+	# 衝刺期間：強制維持 spike，不受 stage 限制
+	if _is_sprint and sprint_force_spike:
+		if not _in_spike:
+			_in_spike       = true
+			_spike_left     = 999.0
+			_spike_spawn_cd = 0.0
+		# 繼續正常的 spike 生成邏輯（下方）
+	elif _get_stage() < spike_min_stage:
 		if _in_spike:
 			_end_spike()
 		return
@@ -369,7 +413,7 @@ func _update_spike_timer(delta: float) -> void:
 		if pair_count < edges.size() and randf() < stage3_spike_big_chance:
 			_spawn_big_enemy_at(_edge_position(edges[pair_count]))
 
-	if _spike_left <= 0.0:
+	if _spike_left <= 0.0 and not (_is_sprint and sprint_force_spike):
 		_end_spike()
 
 
@@ -534,6 +578,8 @@ func _get_stage() -> int:
 
 
 func _get_enemy_multiplier() -> float:
+	if _is_sprint:
+		return sprint_enemy_multiplier
 	match _get_stage():
 		2:
 			return stage2_enemy_multiplier
@@ -675,6 +721,37 @@ func _show_stage_transition(stage: int) -> void:
 		"color",
 		Color(_stage_banner_color(stage).r, _stage_banner_color(stage).g, _stage_banner_color(stage).b, 0.0),
 		0.35
+	)
+	_stage_notice_tween.tween_callback(stage_banner.hide)
+	_stage_notice_tween.tween_callback(stage_label.hide)
+
+
+func _show_sprint_banner() -> void:
+	if _stage_notice_tween != null:
+		_stage_notice_tween.kill()
+
+	var banner_color = Color(1.0, 0.72, 0.08)   # 黃橘色，區別於 stage3 的紅色
+	stage_label.text = sprint_banner_message
+	stage_label.add_theme_color_override("font_color", banner_color)
+	stage_banner.color = Color(banner_color.r, banner_color.g, banner_color.b, 0.0)
+	stage_label.modulate = Color(1, 1, 1, 0)
+	stage_label.scale = Vector2.ONE * 0.60
+	stage_banner.show()
+	stage_label.show()
+
+	_stage_notice_tween = create_tween()
+	_stage_notice_tween.tween_property(stage_label, "modulate", Color(1, 1, 1, 1), 0.14)
+	_stage_notice_tween.parallel().tween_property(stage_label, "scale", Vector2.ONE * 1.20, 0.14)
+	_stage_notice_tween.parallel().tween_property(
+		stage_banner, "color",
+		Color(banner_color.r, banner_color.g, banner_color.b, stage_banner_alpha), 0.14
+	)
+	_stage_notice_tween.tween_property(stage_label, "scale", Vector2.ONE, 0.12)
+	_stage_notice_tween.tween_interval(stage_banner_hold)
+	_stage_notice_tween.tween_property(stage_label, "modulate", Color(1, 1, 1, 0), 0.35)
+	_stage_notice_tween.parallel().tween_property(
+		stage_banner, "color",
+		Color(banner_color.r, banner_color.g, banner_color.b, 0.0), 0.35
 	)
 	_stage_notice_tween.tween_callback(stage_banner.hide)
 	_stage_notice_tween.tween_callback(stage_label.hide)
@@ -920,11 +997,15 @@ func _trigger_game_over() -> void:
 		_mut_overlay.hide()
 	audio_mgr.play(audio_mgr.LOSE)   # 失敗音效
 	_clear_state_overlays()
-	final_label.text = "共 %d 次客訴\n撐到第 %d 波" % [complaint_count, wave_count]
+	var elapsed = game_duration - _time_left
+	var em = int(elapsed) / 60
+	var es = int(elapsed) % 60
+	final_label.text = "共 %d 次客訴\n撐了 %d:%02d" % [complaint_count, em, es]
 	game_over_panel.show()
 
 
 func _update_victory_timer(delta: float) -> void:
+	var was_before_sprint = _time_left > warning_time
 	_time_left = max(_time_left - delta, 0.0)
 
 	var mins = int(_time_left) / 60
@@ -932,10 +1013,11 @@ func _update_victory_timer(delta: float) -> void:
 	timer_label.text = "%d:%02d" % [mins, secs]
 
 	if _time_left <= warning_time:
-		# ── 首次進入衝刺：強制啟動高壓模式 ──────────────
-		if not _in_sprint_mode:
-			_in_sprint_mode = true
-			_enter_sprint_pressure()
+		# 衝刺首次觸發（只執行一次）
+		if was_before_sprint and not _is_sprint:
+			_is_sprint = true
+			_in_sprint_mode = true   # _get_interval_multiplier() 用此旗標
+			_start_sprint_pressure()
 
 		# 顏色由 _update_sprint_visual() 負責，這裡只處理震動
 		_next_warning_shake -= delta
@@ -949,18 +1031,26 @@ func _update_victory_timer(delta: float) -> void:
 		_trigger_win()
 
 
-func _enter_sprint_pressure() -> void:
+func _start_sprint_pressure() -> void:
 	audio_mgr.set_sprint_mode(true)   # BGM 加速到 160 BPM
-	# 立刻重置波次計時器，觸發連續快速波次
-	_wave_timer = _next_wave_in   # 讓下一幀立刻觸發波次
-	for _i in range(sprint_bonus_wave_count):
-		_build_wave_queue()
+	# 立刻觸發一波（把 wave timer 推到上限）
+	_wave_timer = _next_wave_in
 
-	# 強制生成 1–2 隻大型饕客
-	var big_count = randi_range(sprint_big_enemy_min, sprint_big_enemy_max)
-	for _i in range(big_count):
+	# 強制進入爆發波（維持整個衝刺期間）
+	if sprint_force_spike:
+		_in_spike     = true
+		_spike_left   = warning_time + 5.0   # 比倒計時稍長，確保結束前不會退出
+		_spike_spawn_cd = 0.0
+
+	# 強制生成 1-2 隻大型饕客
+	var big_count = randi_range(sprint_big_spawn_min, sprint_big_spawn_max)
+	for _i in big_count:
 		_spawn_big_enemy_at(_edge_position(randi() % 4))
 
+	# 顯示衝刺開始 banner、閃光、震動
+	_show_sprint_banner()
+	_play_screen_flash(Color(1.0, 0.68, 0.08), stage_flash_strength, stage_flash_duration)
+	_add_shake(stage_transition_shake_strength)
 
 func _trigger_win() -> void:
 	if is_game_over:
@@ -1407,6 +1497,48 @@ func _setup_mutation_ui() -> void:
 	_mut_overlay.add_child(_mut_hint)
 
 
+func _run_countdown() -> void:
+	countdown_label.show()
+	for num in [3, 2, 1]:
+		_show_countdown_number(str(num))
+		await get_tree().create_timer(0.85, false, false, false).timeout
+		if not is_inside_tree():
+			return
+	_show_countdown_number(TXT_COUNTDOWN_GO)
+	await get_tree().create_timer(0.60, false, false, false).timeout
+	if not is_inside_tree():
+		return
+	countdown_label.hide()
+	_reset_spawn_timers()
+	_countdown_active = false
+	_set_players_frozen(false)
+
+
+func _show_countdown_number(text: String) -> void:
+	countdown_label.text = text
+	countdown_label.scale = Vector2(0.4, 0.4)
+	var tw = create_tween()
+	tw.tween_property(countdown_label, "scale", Vector2(1.18, 1.18), 0.15)
+	tw.tween_property(countdown_label, "scale", Vector2.ONE, 0.14)
+
+
+func _set_players_frozen(value: bool) -> void:
+	for p in get_tree().get_nodes_in_group("players"):
+		p.frozen = value
+
+
+func _toggle_pause() -> void:
+	_paused = not _paused
+	get_tree().paused = _paused
+	pause_panel.visible = _paused
+
+
+func _on_menu_pressed() -> void:
+	Engine.time_scale = 1.0
+	get_tree().paused = false
+	get_tree().change_scene_to_file("res://scenes/main_menu.tscn")
+
+
 func _on_restart_pressed() -> void:
 	Engine.time_scale = 1.0
 	get_tree().paused = false   # 防止重啟時仍處於突變暫停狀態
@@ -1485,7 +1617,7 @@ func _setup_ui() -> void:
 	game_over_panel.add_child(vbox)
 
 	var title = Label.new()
-	title.text = "客訴太多啦！"
+	title.text = TXT_LOSE_TITLE
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title.add_theme_font_size_override("font_size", 40)
 	title.add_theme_color_override("font_color", Color(1.0, 0.3, 0.3))
@@ -1497,11 +1629,17 @@ func _setup_ui() -> void:
 	final_label.add_theme_color_override("font_color", Color(0.9, 0.9, 0.9))
 	vbox.add_child(final_label)
 
-	var btn = Button.new()
-	btn.text = "重新開始"
-	btn.add_theme_font_size_override("font_size", 22)
-	btn.pressed.connect(_on_restart_pressed)
-	vbox.add_child(btn)
+	var btn_replay = Button.new()
+	btn_replay.text = TXT_REPLAY
+	btn_replay.add_theme_font_size_override("font_size", 22)
+	btn_replay.pressed.connect(_on_restart_pressed)
+	vbox.add_child(btn_replay)
+
+	var btn_menu = Button.new()
+	btn_menu.text = TXT_BACK_MENU
+	btn_menu.add_theme_font_size_override("font_size", 22)
+	btn_menu.pressed.connect(_on_menu_pressed)
+	vbox.add_child(btn_menu)
 
 	# ── 倒數計時器（右上角）────────────────────────────
 	timer_label = Label.new()
@@ -1528,7 +1666,7 @@ func _setup_ui() -> void:
 	win_panel.add_child(win_vbox)
 
 	var win_title = Label.new()
-	win_title.text = "撐過 2 分鐘！"
+	win_title.text = TXT_WIN_TITLE
 	win_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	win_title.add_theme_font_size_override("font_size", 40)
 	win_title.add_theme_color_override("font_color", Color(1.0, 0.90, 0.25))
@@ -1540,11 +1678,17 @@ func _setup_ui() -> void:
 	win_final_label.add_theme_color_override("font_color", Color(0.9, 0.9, 0.9))
 	win_vbox.add_child(win_final_label)
 
-	var win_btn = Button.new()
-	win_btn.text = "重新開始"
-	win_btn.add_theme_font_size_override("font_size", 22)
-	win_btn.pressed.connect(_on_restart_pressed)
-	win_vbox.add_child(win_btn)
+	var win_replay = Button.new()
+	win_replay.text = TXT_REPLAY
+	win_replay.add_theme_font_size_override("font_size", 22)
+	win_replay.pressed.connect(_on_restart_pressed)
+	win_vbox.add_child(win_replay)
+
+	var win_menu = Button.new()
+	win_menu.text = TXT_BACK_MENU
+	win_menu.add_theme_font_size_override("font_size", 22)
+	win_menu.pressed.connect(_on_menu_pressed)
+	win_vbox.add_child(win_menu)
 
 	# ── 危險 vignette（4 邊緣色塊，初始透明）──────────────
 	var edge = vignette_edge_size
@@ -1597,3 +1741,48 @@ func _setup_ui() -> void:
 	sprint_label.modulate = Color(1.0, 1.0, 1.0, 0.0)
 	sprint_label.visible = false
 	ui_layer.add_child(sprint_label)
+
+	# ── 開始倒數 Label（大字居中）────────────────────────
+	countdown_label = Label.new()
+	countdown_label.position = Vector2(440.0, 250.0)
+	countdown_label.size = Vector2(400.0, 220.0)
+	countdown_label.pivot_offset = Vector2(200.0, 110.0)
+	countdown_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	countdown_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	countdown_label.add_theme_font_size_override("font_size", 110)
+	countdown_label.add_theme_color_override("font_color", Color(1.0, 0.95, 0.55))
+	countdown_label.hide()
+	ui_layer.add_child(countdown_label)
+
+	# ── 暫停面板（ESC，PROCESS_MODE_ALWAYS 讓按鈕在暫停中可用）
+	pause_panel = Panel.new()
+	pause_panel.process_mode = Node.PROCESS_MODE_ALWAYS
+	pause_panel.position = Vector2(490.0, 240.0)
+	pause_panel.size = Vector2(300.0, 240.0)
+	pause_panel.hide()
+	ui_layer.add_child(pause_panel)
+
+	var pvbox = VBoxContainer.new()
+	pvbox.set_anchors_preset(Control.PRESET_FULL_RECT)
+	pvbox.add_theme_constant_override("separation", 18)
+	pvbox.alignment = BoxContainer.ALIGNMENT_CENTER
+	pause_panel.add_child(pvbox)
+
+	var p_title = Label.new()
+	p_title.text = TXT_PAUSE_TITLE
+	p_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	p_title.add_theme_font_size_override("font_size", 36)
+	p_title.add_theme_color_override("font_color", Color(1.0, 0.92, 0.55))
+	pvbox.add_child(p_title)
+
+	var p_resume = Button.new()
+	p_resume.text = TXT_RESUME
+	p_resume.add_theme_font_size_override("font_size", 22)
+	p_resume.pressed.connect(_toggle_pause)
+	pvbox.add_child(p_resume)
+
+	var p_menu = Button.new()
+	p_menu.text = TXT_BACK_MENU
+	p_menu.add_theme_font_size_override("font_size", 22)
+	p_menu.pressed.connect(_on_menu_pressed)
+	pvbox.add_child(p_menu)

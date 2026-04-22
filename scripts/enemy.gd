@@ -40,6 +40,7 @@ const CHAIN_TOUCH_DIST = RADIUS * 2.0 + 8.0   # 56px
 @export_group("Chain Collision")
 @export var chain_speed_ratio  : float = 0.84   # ↑ 0.72 → 0.84：每跳保留更多速度，鏈更長
 @export var chain_player_ratio : float = 0.80   # NEW：敵人飛行速度 × 比例 → 玩家擊退力（速度越快推越狠）
+@export var max_fly_speed      : float = 1800.0 # ← 擊飛速度上限（防止連鎖爆炸導致 NaN 瞬移）
 
 # ── 安全限制（防止大量碰撞時速度爆棚或位置 NaN）──
 @export_group("Safety Limits")
@@ -84,8 +85,11 @@ func _ready() -> void:
 
 
 func _physics_process(delta: float) -> void:
-	# ── 位置健全度檢查：NaN 或無限值 → 直接移除，避免瞬移 ──
-	if not _is_state_safe():
+	# ── 安全性保護：NaN/Inf 偵測，防止 move_and_slide 瞬移 ──
+	# 根本原因：連鎖碰撞在極端幀率下速度可能溢出為 NaN，
+	# Godot 物理引擎在 NaN velocity 下會把 position 重置回 (0,0)（即生成點）
+	if not is_finite(position.x) or not is_finite(position.y) \
+	   or not is_finite(_hit_vel.x) or not is_finite(_hit_vel.y):
 		queue_free()
 		return
 
@@ -105,6 +109,7 @@ func _physics_process(delta: float) -> void:
 	if _dying:
 		_hit_vel = _hit_vel.limit_length(max_fly_speed)   # ← 防止連鎖速度爆棚
 		_hit_vel    = _hit_vel.lerp(Vector2.ZERO, FLY_DECEL * delta)
+		_hit_vel    = _hit_vel.limit_length(max_fly_speed)  # ← 速度上限，防連鎖爆炸
 		_spin_angle += _spin_speed * delta
 		_spin_speed  = _spin_speed * (1.0 - 3.5 * delta)
 		velocity     = _hit_vel
@@ -239,14 +244,23 @@ func take_hit(hit_dir: Vector2 = Vector2.RIGHT, hit_speed: float = 420.0, _attac
 	# 混亂中允許重新被擊：讓被推進來的敵人可以再被打出去
 	if _dying and not _chaotic:
 		return
+
+	# 輸入防衛：方向或速度無效時直接丟棄（防止 NaN 從 chain 傳入）
+	if not is_finite(hit_dir.x) or not is_finite(hit_dir.y) or not is_finite(hit_speed):
+		return
+
 	_dying  = true
 	_fading = false
 	_chaotic = false
 	_chain_hit_bodies.clear()
 
+	# 速度上限：防止連鎖爆炸累積過高速度
+	hit_speed = clamp(hit_speed, 0.0, max_fly_speed)
+
 	# 加入隨機角度偏移（±40 度），讓撞飛方向無法完全預測
 	var spread = randf_range(-HIT_ANGLE_SPREAD, HIT_ANGLE_SPREAD)
-	_hit_vel = hit_dir.rotated(spread) * hit_speed
+	var safe_dir = hit_dir if hit_dir.length_squared() > 0.001 else Vector2.RIGHT
+	_hit_vel = safe_dir.normalized().rotated(spread) * hit_speed
 
 	var sign = 1.0 if randf() > 0.5 else -1.0
 	_spin_speed = sign * randf_range(10.0, 18.0)   # 更快的旋轉，視覺更誇張

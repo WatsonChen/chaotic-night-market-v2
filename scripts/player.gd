@@ -92,6 +92,7 @@ const MAP_CENTER       = Vector2(640.0, 360.0)   # 需與 main.gd 一致
 @export var zone_push_force     : float = 150.0  # ← 向外推力（px/s）
 
 var zone_complaint_count : int = 0   # 由 main.gd 每幀設定，不要手動改
+var frozen: bool = false             # true 時鎖定所有移動與射擊（倒數期間）
 
 # ── 突變系統 hook（由 main.gd 寫入）────────────────
 var mutation_speed_mult : float = 1.0   # 突變③ 全場加速倍率
@@ -174,6 +175,9 @@ func _get_move_dir() -> Vector2:
 
 
 func _process(delta: float) -> void:
+	if frozen:
+		return
+
 	_shoot_cd -= delta
 
 	if _stun_timer > 0.0:
@@ -212,6 +216,10 @@ func _process(delta: float) -> void:
 
 
 func _physics_process(delta: float) -> void:
+	if frozen:
+		velocity = Vector2.ZERO
+		return
+
 	_sanitize_player_state()
 	var dir = Vector2.ZERO
 
