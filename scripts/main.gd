@@ -168,6 +168,13 @@ const TXT_COUNTDOWN_GO = "GO！"
 @export var sprint_brightness_speed: float = 3.0                    # ← pulse 頻率（Hz）
 @export var sprint_label_text: String = "最後衝刺！撐住！"           # ← 提示文字
 
+@export_group("Polish Shake")
+@export var break_shake_duration     : float = 0.40   # ← 大型破防震動持續時間（秒）
+@export var complaint_shake_strength : float = 3.0    # ← 客訴 +1 震動強度
+@export var complaint_shake_duration : float = 0.10   # ← 客訴 +1 震動持續時間（秒）
+@export var win_shake_strength       : float = 8.0    # ← 勝利震動強度
+@export var win_shake_duration       : float = 0.50   # ← 勝利震動持續時間（秒）
+
 @export_group("Mutation System")
 @export var mutation_interval      : float = 60.0   # ← 觸發間隔（秒）
 @export var mutation_choose_time   : float = 5.0    # ← 選擇倒數（秒）
@@ -229,6 +236,9 @@ var _spawn_pause_timer: float = 0.0
 var _comeback_cooldown_left: float = 0.0
 var _feedback_time: float = 0.0
 var _impulse_shake: float = 0.0
+var _sustained_shake_strength: float = 0.0   # 持續震動強度（duration-based）
+var _sustained_shake_timer: float = 0.0      # 持續震動剩餘時間（秒）
+var _complaint_color_locked: bool = false    # 客訴閃紅色鎖定旗標
 var _slowmo_token: int = 0
 
 var complaint_label: Label
@@ -609,6 +619,7 @@ func _on_enemy_reach_center(complaint_delta: int = 1) -> void:
 	_set_complaint_count(complaint_count + complaint_delta, true)
 	_play_screen_flash(Color(1.0, 0.18, 0.1), complaint_flash_strength, complaint_flash_duration)
 	_add_shake(impact_shake_strength * (0.45 if complaint_delta == 1 else 0.75))
+	_add_sustained_shake(complaint_shake_strength * complaint_delta, complaint_shake_duration)
 
 	if complaint_count >= max_complaints:
 		_trigger_game_over()
@@ -622,7 +633,7 @@ func _on_big_enemy_armor_broken(break_position: Vector2) -> void:
 	var triggered_comeback = complaint_count >= comeback_min_complaints and _comeback_cooldown_left <= 0.0
 	_spawn_break_burst(break_position)
 	_play_screen_flash(Color(1.0, 1.0, 1.0), break_flash_strength, break_flash_duration)
-	_add_shake(break_shake_strength)
+	_add_sustained_shake(break_shake_strength, break_shake_duration)
 	food_court.trigger_break_pulse(1.25)
 	_start_break_time_fx(triggered_comeback)
 
@@ -635,6 +646,7 @@ func _trigger_comeback(break_position: Vector2) -> void:
 	_spawn_pause_timer = max(_spawn_pause_timer, comeback_spawn_pause)
 	_set_complaint_count(complaint_count - comeback_complaint_reduction, true)
 	_spawn_comeback_burst(break_position)
+	_spawn_green_burst(break_position)   # 客訴 -1 綠色粒子噴發
 	_play_screen_flash(Color(1.0, 1.0, 0.92), comeback_flash_strength, comeback_flash_duration)
 	_add_shake(comeback_shake_strength)
 	_show_comeback_notice()
@@ -663,9 +675,14 @@ func _update_complaint_label(play_bump: bool) -> void:
 		_complaint_bump_tween.kill()
 
 	complaint_label.scale = Vector2.ONE
+	# 閃紅色並鎖定，防止 _sync_tension_feedback 立刻覆蓋
+	_complaint_color_locked = true
+	complaint_label.add_theme_color_override("font_color", Color(1.0, 0.12, 0.08))
+
 	_complaint_bump_tween = create_tween()
-	_complaint_bump_tween.tween_property(complaint_label, "scale", Vector2(1.22, 1.22), 0.08)
-	_complaint_bump_tween.tween_property(complaint_label, "scale", Vector2.ONE, 0.18)
+	_complaint_bump_tween.tween_property(complaint_label, "scale", Vector2(1.50, 1.50), 0.07)
+	_complaint_bump_tween.tween_property(complaint_label, "scale", Vector2.ONE, 0.20)
+	_complaint_bump_tween.tween_callback(func(): _complaint_color_locked = false)
 
 
 func _on_stage_changed(old_stage: int, new_stage: int) -> void:
@@ -936,6 +953,46 @@ func _spawn_comeback_burst(pos: Vector2) -> void:
 	)
 
 
+func _spawn_green_burst(pos: Vector2) -> void:
+	# 客訴 -1 專用：明亮綠色粒子噴發，傳達「減少壓力」
+	_spawn_hit_effect(
+		pos,
+		true,
+		comeback_secondary_effect_scale,
+		{
+			"duration_override": 0.52,
+			"particle_count_override": 18,
+			"ring_count_override": 3,
+			"fly_distance_override": 112.0,
+			"ring_max_override": 104.0,
+			"white_ring_boost": 0.8,
+			"primary_color":   Color(0.22, 1.0,  0.44),
+			"secondary_color": Color(0.62, 1.0,  0.62),
+			"accent_color":    Color(0.88, 1.0,  0.18),
+			"particle_size_ratio": 1.05,
+			"ring_width_ratio":    1.10,
+		}
+	)
+	for _i in range(3):
+		var angle = randf() * TAU
+		var offset = Vector2(cos(angle), sin(angle)) * randf_range(14.0, 88.0)
+		_spawn_hit_effect(
+			pos + offset,
+			true,
+			comeback_secondary_effect_scale * 0.72,
+			{
+				"duration_override": 0.38,
+				"particle_count_override": 10,
+				"ring_count_override": 2,
+				"fly_distance_override": 72.0,
+				"ring_max_override": 64.0,
+				"primary_color":   Color(0.22, 1.0,  0.44),
+				"secondary_color": Color(0.72, 1.0,  0.72),
+				"accent_color":    Color(0.60, 0.96, 0.22),
+			}
+		)
+
+
 func _play_screen_flash(base_color: Color, strength: float, duration: float) -> void:
 	if _flash_tween != null:
 		_flash_tween.kill()
@@ -1064,6 +1121,7 @@ func _trigger_win() -> void:
 	if _mut_overlay:
 		_mut_overlay.hide()
 	audio_mgr.play(audio_mgr.WIN)   # 勝利音效
+	_add_sustained_shake(win_shake_strength, win_shake_duration)
 	_clear_state_overlays()
 	win_final_label.text = "本場客訴：%d 次" % complaint_count
 	win_panel.show()
@@ -1151,12 +1209,18 @@ func _update_world_feedback(delta: float) -> void:
 		return
 	_impulse_shake = max(_impulse_shake - shake_decay * delta, 0.0)
 
+	# 持續震動（duration-based，用於破防 / 客訴 / 勝利等持續回饋）
+	if _sustained_shake_timer > 0.0:
+		_sustained_shake_timer -= delta
+		if _sustained_shake_timer <= 0.0:
+			_sustained_shake_strength = 0.0
+
 	var danger_shake = 0.0
 	if complaint_count >= stage3_threshold and not is_game_over:
 		var pulse = 0.5 + 0.5 * sin(_feedback_time * 20.0)
 		danger_shake = danger_shake_strength * (0.45 + pulse * 0.55)
 
-	var shake_strength = max(_impulse_shake, danger_shake)
+	var shake_strength = max(_impulse_shake, max(danger_shake, _sustained_shake_strength))
 	if shake_strength <= 0.01:
 		world_node.position = Vector2.ZERO
 		return
@@ -1169,13 +1233,23 @@ func _add_shake(strength: float) -> void:
 	_impulse_shake = max(_impulse_shake, strength)
 
 
+func _add_sustained_shake(strength: float, duration: float) -> void:
+	_add_shake(strength)   # 同步觸發衝擊震動
+	if strength > _sustained_shake_strength:
+		_sustained_shake_strength = strength
+	if duration > _sustained_shake_timer:
+		_sustained_shake_timer = duration
+
+
 func _sync_tension_feedback() -> void:
-	var label_color = Color(1.0, 0.92, 0.3)
-	if _get_stage() == 2:
-		label_color = Color(1.0, 0.72, 0.28)
-	elif _get_stage() >= 3:
-		label_color = Color(1.0, 0.42, 0.35)
-	complaint_label.add_theme_color_override("font_color", label_color)
+	# 客訴閃紅鎖定期間不覆蓋顏色
+	if not _complaint_color_locked:
+		var label_color = Color(1.0, 0.92, 0.3)
+		if _get_stage() == 2:
+			label_color = Color(1.0, 0.72, 0.28)
+		elif _get_stage() >= 3:
+			label_color = Color(1.0, 0.42, 0.35)
+		complaint_label.add_theme_color_override("font_color", label_color)
 
 	var ambient_color = Color(0.0, 0.0, 0.0, 0.0)
 	if _get_stage() == 2:

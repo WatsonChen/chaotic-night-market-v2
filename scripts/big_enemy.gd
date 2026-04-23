@@ -35,8 +35,8 @@ const REACH_DIST = 36.0
 @export var break_angle_spread: float = 0.08
 
 @export_group("Armor Bars")
-@export var armor_bar_width: float = 46.0
-@export var armor_bar_height: float = 10.0
+@export var armor_bar_width: float = 52.0
+@export var armor_bar_height: float = 13.0
 @export var armor_bar_gap: float = 10.0
 @export var armor_bar_offset_y: float = -76.0
 @export var armor_bar_fill_speed: float = 8.0
@@ -218,16 +218,47 @@ func _draw_armor_bars() -> void:
 	var start_x = -total_width * 0.5
 	var y = armor_bar_offset_y
 
-	_draw_single_bar(Rect2(start_x, y, armor_bar_width, armor_bar_height), _p1_bar_fill, p1_bar_color)
-	_draw_single_bar(Rect2(start_x + armor_bar_width + armor_bar_gap, y, armor_bar_width, armor_bar_height), _p2_bar_fill, p2_bar_color)
+	# urgent：開窗且只有一位玩家命中，提示「快了！」
+	var urgent = _coop_window_active and _coop_hitters.size() == 1
+
+	_draw_single_bar(Rect2(start_x, y, armor_bar_width, armor_bar_height), _p1_bar_fill, p1_bar_color, urgent)
+	_draw_single_bar(Rect2(start_x + armor_bar_width + armor_bar_gap, y, armor_bar_width, armor_bar_height), _p2_bar_fill, p2_bar_color, urgent)
+
+	if urgent:
+		# 在進度條上方閃爍「快了！」提示文字
+		var pulse = 0.5 + 0.5 * sin(_pulse_time * 2.0)
+		var text_alpha = 0.65 + pulse * 0.35
+		draw_string(
+			ThemeDB.fallback_font,
+			Vector2(-total_width * 0.5, armor_bar_offset_y - 5.0),
+			"快了！",
+			HORIZONTAL_ALIGNMENT_CENTER,
+			total_width,
+			14,
+			Color(1.0, 0.95, 0.40, text_alpha)
+		)
 
 
-func _draw_single_bar(rect: Rect2, fill_ratio: float, fill_color: Color) -> void:
+func _draw_single_bar(rect: Rect2, fill_ratio: float, fill_color: Color, urgent: bool = false) -> void:
 	draw_rect(rect, armor_bar_bg_color)
 	var inner = rect.grow(-1.5)
 	if fill_ratio > 0.0:
 		draw_rect(Rect2(inner.position, Vector2(inner.size.x * clamp(fill_ratio, 0.0, 1.0), inner.size.y)), fill_color)
-	draw_rect(rect, armor_bar_outline_color, false, 1.6)
+
+	if urgent:
+		# 閃爍輪廓 + 空欄位亮色暗示「缺少另一人」
+		var pulse = 0.5 + 0.5 * sin(_pulse_time * 2.0)
+		draw_rect(rect, Color(1.0, 0.95, 0.40, 0.65 + pulse * 0.35), false, 2.5)
+		var filled = clamp(fill_ratio, 0.0, 1.0)
+		var empty_x = inner.position.x + inner.size.x * filled
+		var empty_w = inner.size.x * (1.0 - filled)
+		if empty_w > 0.5:
+			draw_rect(
+				Rect2(empty_x, inner.position.y, empty_w, inner.size.y),
+				Color(1.0, 0.95, 0.40, 0.12 + pulse * 0.18)
+			)
+	else:
+		draw_rect(rect, armor_bar_outline_color, false, 1.6)
 
 
 func take_hit(hit_dir: Vector2 = Vector2.RIGHT, hit_speed: float = 420.0, attacker_id: int = 0) -> void:
