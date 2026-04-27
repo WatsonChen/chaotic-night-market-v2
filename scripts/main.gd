@@ -184,14 +184,18 @@ const TXT_COUNTDOWN_GO = "GO！"
 @export var mutation_big_mult      : float = 3.0    # ← 突變④：大型饕客機率倍率
 @export var mutation_big_secs      : float = 20.0   # ← 突變④：持續秒數
 @export var mutation_complaint_cut : int   = 2      # ← 突變⑤：客訴減免量
-@export var mutation_card_w        : float = 276.0  # ← 卡片寬度
-@export var mutation_card_h        : float = 192.0  # ← 卡片高度
-@export var mutation_card_gap      : float = 28.0   # ← 卡片間距
-@export var mutation_overlay_color : Color = Color(0.07, 0.03, 0.16, 0.90)
+@export var mutation_card_w        : float = 320.0  # ← 卡片寬度（更大）
+@export var mutation_card_h        : float = 252.0  # ← 卡片高度（更高）
+@export var mutation_card_gap      : float = 24.0   # ← 卡片間距
+@export var mutation_overlay_color : Color = Color(0.07, 0.03, 0.16, 0.92)
 @export var mutation_card_normal   : Color = Color(0.18, 0.10, 0.34, 1.00)
 @export var mutation_card_hover    : Color = Color(0.44, 0.26, 0.74, 1.00)
 @export var mutation_card_p2sel    : Color = Color(0.14, 0.44, 0.18, 1.00)
 @export var mutation_bar_color     : Color = Color(0.30, 0.84, 0.42, 1.00)
+@export var mutation_activate_slowmo_scale    : float = 0.12   # ← 突變生效慢動作倍率
+@export var mutation_activate_slowmo_duration : float = 0.48   # ← 突變生效慢動作持續（秒）
+@export var mutation_announce_duration        : float = 1.50   # ← 突變名稱顯示持續（秒）
+@export var mutation_bar_warn_threshold       : float = 2.20   # ← 倒數條閃爍閾值（秒）
 
 @export_group("Final Sprint Pressure")
 @export var sprint_wave_interval_multiplier : float = 0.15  # ← 衝刺期間波次間隔倍率（越小越快）
@@ -214,6 +218,9 @@ var _mut_p2_cursor     : int      = 0
 var _mut_speed_timer   : float    = 0.0
 var _mut_big_timer     : float    = 0.0
 var _mut_big_active    : bool     = false
+var _mut_base_colors   : Array    = [Color.WHITE, Color.WHITE, Color.WHITE]
+var _mut_announce_label : Label   = null
+var _mut_announce_tween : Tween   = null
 
 var _countdown_active: bool = true   # 遊戲開始倒數旗標
 var _paused: bool = false            # 玩家主動暫停旗標
@@ -293,6 +300,7 @@ var _mut_cards      : Array[ColorRect] = []
 var _mut_card_tl    : Array[Label]     = []   # 標題 labels
 var _mut_card_dl    : Array[Label]     = []   # 說明 labels
 var _mut_card_nl    : Array[Label]     = []   # 編號 labels
+var _mut_card_tops  : Array[ColorRect] = []   # 頂部顏色條
 
 @onready var world_node: Node2D = $World
 @onready var food_court = $World/FoodCourt
@@ -1318,22 +1326,36 @@ func _update_mutation_system(delta: float) -> void:
 func _update_mutation_ui_logic(delta: float) -> void:
 	_mut_countdown -= delta
 
-	# 進度條
+	# 進度條寬度
 	var ratio = clamp(_mut_countdown / mutation_choose_time, 0.0, 1.0)
 	_mut_bar_fill.size.x = _mut_bar_bg.size.x * ratio
 	_mut_cd_label.text   = "%.1f 秒後自動隨機選擇" % maxf(_mut_countdown, 0.0)
 
-	# 滑鼠懸停
+	# 快結束時：倒數條閃爍紅色 + 文字轉橘紅
+	if _mut_countdown < mutation_bar_warn_threshold:
+		var flash = 0.5 + 0.5 * sin(_feedback_time * TAU * 3.5)
+		_mut_bar_fill.color = Color(1.0, lerp(0.18, 0.85, flash), lerp(0.08, 0.20, flash), 1.0)
+		_mut_cd_label.add_theme_color_override("font_color", Color(1.0, 0.35 + flash * 0.52, 0.08 + flash * 0.24, 1.0))
+	else:
+		_mut_bar_fill.color = mutation_bar_color
+		_mut_cd_label.add_theme_color_override("font_color", Color(0.78, 0.95, 0.78, 0.88))
+
+	# 滑鼠懸停 + 以突變色調計算 hover 顏色
 	var mp = get_viewport().get_mouse_position()
 	_mut_hovered = _get_hovered_card(mp)
 
 	for i in range(3):
+		var base : Color = _mut_base_colors[i]
 		if i == _mut_hovered:
-			_mut_cards[i].color = mutation_card_hover
+			_mut_cards[i].color = Color(
+				min(base.r + 0.26, 1.0), min(base.g + 0.22, 1.0), min(base.b + 0.26, 1.0), 1.0
+			)
 		elif i == _mut_p2_cursor:
-			_mut_cards[i].color = mutation_card_p2sel
+			_mut_cards[i].color = Color(
+				min(base.r + 0.14, 1.0), min(base.g + 0.12, 1.0), min(base.b + 0.16, 1.0), 1.0
+			)
 		else:
-			_mut_cards[i].color = mutation_card_normal
+			_mut_cards[i].color = base
 
 	# 時間到 → 自動隨機選
 	if _mut_countdown <= 0.0:
@@ -1354,18 +1376,34 @@ func _show_mutation_choice() -> void:
 	_mut_countdown = mutation_choose_time
 	_in_mutation   = true
 
-	# 填卡片內容
+	# 填卡片內容 + 突變色背景 + 彈入動畫
 	for i in range(3):
 		var d : Dictionary = _mut_def(_mut_choices[i])
 		_mut_card_tl[i].text = d["title"]
 		_mut_card_dl[i].text = d["desc"]
 		var c : Color = d["color"]
-		_mut_card_nl[i].add_theme_color_override("font_color", Color(c.r, c.g, c.b, 0.55))
+		_mut_card_nl[i].add_theme_color_override("font_color", Color(c.r, c.g, c.b, 0.58))
 		_mut_card_tl[i].add_theme_color_override("font_color", c)
-		_mut_cards[i].color = mutation_card_normal
+
+		# 卡片底色：以突變顏色調出深色背景
+		var base := Color(0.08 + c.r * 0.18, 0.04 + c.g * 0.12, 0.12 + c.b * 0.18, 1.0)
+		_mut_base_colors[i] = base
+		_mut_cards[i].color = base
+
+		# 頂部顏色條更新為突變色
+		_mut_card_tops[i].color = Color(c.r, c.g, c.b, 0.75)
+
+		# 彈入動畫：從 0 → 1.12 → 1.0，每張間隔 0.06 秒
+		_mut_cards[i].scale = Vector2.ZERO
+		var tw = _mut_cards[i].create_tween()
+		tw.tween_interval(i * 0.06)
+		tw.tween_property(_mut_cards[i], "scale", Vector2(1.12, 1.12), 0.14).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+		tw.tween_property(_mut_cards[i], "scale", Vector2.ONE, 0.08)
 
 	_mut_bar_fill.size.x = _mut_bar_bg.size.x
+	_mut_bar_fill.color  = mutation_bar_color
 	_mut_cd_label.text   = "%.1f 秒後自動隨機選擇" % mutation_choose_time
+	_mut_cd_label.add_theme_color_override("font_color", Color(0.78, 0.95, 0.78, 0.88))
 	_mut_overlay.show()
 	audio_mgr.play(audio_mgr.MUTATION)   # 突變出現音效
 	get_tree().paused = true
@@ -1376,34 +1414,74 @@ func _hide_mutation_choice(slot: int) -> void:
 	get_tree().paused = false
 	_in_mutation = false
 	_mut_overlay.hide()
-	_apply_mutation(_mut_choices[slot])
+
+	var chosen_id : int = _mut_choices[slot]
+	var d : Dictionary = _mut_def(chosen_id)
+
+	# 突變生效瞬間：閃光 + 震動 + 公告文字 + 慢動作
+	_play_screen_flash(d["color"], 0.65, 0.35)
+	_add_sustained_shake(7.0, 0.30)
+	_show_mutation_announce(d["title"], d["color"])
+	_start_mutation_activation_fx()
+
+	_apply_mutation(chosen_id)
 	_mut_trigger_timer = 0.0
 
 
 # ── 套用突變效果 ─────────────────────────────────────
 func _apply_mutation(mut_id: int) -> void:
 	match mut_id:
-		0:  # 熱狗太興奮：P1 擊退 ×2（永久）
+		0:  # 熱狗太興奮：P1 擊退 ×2（永久）+ 子彈 ×2 大
 			for p in get_tree().get_nodes_in_group("players"):
 				if p.player_index == 1:
-					p.proj_knockback *= mutation_p1_kb_mult
+					p.proj_knockback   *= mutation_p1_kb_mult
+					p.proj_radius_mult  = 2.0
+					_spawn_player_mutation_burst(p.global_position, Color(1.0, 0.62, 0.08))
 
 		1:  # 珍珠大爆發：P2 命中必定滑地（永久）
 			for p in get_tree().get_nodes_in_group("players"):
 				if p.player_index == 2:
 					p.p2_always_grease = true
+					_spawn_player_mutation_burst(p.global_position, Color(0.28, 0.72, 1.0))
 
 		2:  # 全場加速 +30%，持續 15 秒
 			for p in get_tree().get_nodes_in_group("players"):
 				p.mutation_speed_mult = mutation_speed_ratio
+				_spawn_player_mutation_burst(p.global_position, Color(0.48, 1.0, 0.50))
 			_mut_speed_timer = mutation_speed_secs
 
 		3:  # 大胃王狂潮：大型饕客機率 ×3，持續 20 秒
 			_mut_big_active = true
 			_mut_big_timer  = mutation_big_secs
+			_spawn_hit_effect(MAP_CENTER, true, 3.2, {
+				"duration_override": 0.72,
+				"particle_count_override": 32,
+				"ring_count_override": 5,
+				"fly_distance_override": 200.0,
+				"ring_max_override": 188.0,
+				"white_ring_boost": 1.6,
+				"primary_color": Color(1.0, 0.28, 0.28),
+				"secondary_color": Color(1.0, 0.58, 0.32),
+				"accent_color": Color(1.0, 0.08, 0.08),
+				"particle_size_ratio": 1.3,
+				"ring_width_ratio": 1.4,
+			})
 
 		4:  # 客訴減免：立即 -N
 			_set_complaint_count(complaint_count - mutation_complaint_cut)
+			_spawn_hit_effect(MAP_CENTER, true, 2.8, {
+				"duration_override": 0.64,
+				"particle_count_override": 26,
+				"ring_count_override": 4,
+				"fly_distance_override": 170.0,
+				"ring_max_override": 160.0,
+				"white_ring_boost": 1.4,
+				"primary_color": Color(0.22, 1.0, 0.44),
+				"secondary_color": Color(0.72, 1.0, 0.72),
+				"accent_color": Color(1.0, 0.95, 0.28),
+				"particle_size_ratio": 1.15,
+				"ring_width_ratio": 1.2,
+			})
 
 
 # ── 滑鼠在哪張卡片上（回傳 0-2，-1=沒有）───────────
@@ -1414,6 +1492,77 @@ func _get_hovered_card(mouse_pos: Vector2) -> int:
 		if r.has_point(mouse_pos):
 			return i
 	return -1
+
+
+# ── 突變生效：中央大字公告 ───────────────────────────
+func _show_mutation_announce(text: String, color: Color) -> void:
+	_mut_announce_label.text = "⚡ " + text + " ⚡"
+	_mut_announce_label.add_theme_color_override("font_color", color)
+	_mut_announce_label.modulate = Color(1.0, 1.0, 1.0, 0.0)
+	_mut_announce_label.scale = Vector2(0.5, 0.5)
+	_mut_announce_label.show()
+
+	if _mut_announce_tween != null:
+		_mut_announce_tween.kill()
+	_mut_announce_tween = create_tween()
+	_mut_announce_tween.tween_property(_mut_announce_label, "modulate", Color(1.0, 1.0, 1.0, 1.0), 0.12)
+	_mut_announce_tween.parallel().tween_property(_mut_announce_label, "scale", Vector2(1.22, 1.22), 0.12).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	_mut_announce_tween.tween_property(_mut_announce_label, "scale", Vector2.ONE, 0.10)
+	_mut_announce_tween.tween_interval(mutation_announce_duration - 0.42)
+	_mut_announce_tween.tween_property(_mut_announce_label, "modulate", Color(1.0, 1.0, 1.0, 0.0), 0.30)
+	_mut_announce_tween.tween_callback(func(): _mut_announce_label.hide())
+
+
+# ── 突變生效：慢動作 FX ──────────────────────────────
+func _start_mutation_activation_fx() -> void:
+	_slowmo_token += 1
+	_run_mutation_slowmo(_slowmo_token)
+
+
+func _run_mutation_slowmo(token: int) -> void:
+	Engine.time_scale = mutation_activate_slowmo_scale
+	await get_tree().create_timer(mutation_activate_slowmo_duration, true, false, true).timeout
+	if not is_inside_tree() or token != _slowmo_token:
+		return
+	if not is_game_over:
+		Engine.time_scale = 1.0
+
+
+# ── 突變生效：玩家身上粒子爆發 ──────────────────────
+func _spawn_player_mutation_burst(pos: Vector2, color: Color) -> void:
+	_spawn_hit_effect(pos, true, 2.8, {
+		"duration_override": 0.62,
+		"particle_count_override": 22,
+		"ring_count_override": 4,
+		"fly_distance_override": 150.0,
+		"ring_max_override": 138.0,
+		"white_ring_boost": 1.8,
+		"primary_color": color,
+		"secondary_color": Color(
+			min(color.r * 0.55 + 0.44, 1.0),
+			min(color.g * 0.55 + 0.44, 1.0),
+			min(color.b * 0.55 + 0.44, 1.0)
+		),
+		"accent_color": Color(1.0, 1.0, 0.88),
+		"particle_size_ratio": 1.15,
+		"ring_width_ratio": 1.20,
+	})
+	for _i in range(2):
+		var a = randf() * TAU
+		_spawn_hit_effect(
+			pos + Vector2(cos(a), sin(a)) * randf_range(14.0, 62.0),
+			true, 1.7,
+			{
+				"duration_override": 0.44,
+				"particle_count_override": 12,
+				"ring_count_override": 2,
+				"fly_distance_override": 84.0,
+				"ring_max_override": 76.0,
+				"primary_color": color,
+				"secondary_color": Color(1.0, 1.0, 1.0),
+				"white_ring_boost": 1.2,
+			}
+		)
 
 
 # ── 輸入：突變選擇期間的 P1 點擊 / P2 鍵盤 ──────────
@@ -1449,7 +1598,7 @@ func _unhandled_input(event: InputEvent) -> void:
 
 # ── 突變 UI 建立（在 _setup_ui 之後呼叫）────────────
 func _setup_mutation_ui() -> void:
-	# 全螢幕半透明遮罩
+	# ── 全螢幕半透明遮罩 ─────────────────────────────
 	_mut_overlay = ColorRect.new()
 	_mut_overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_mut_overlay.color = mutation_overlay_color
@@ -1457,119 +1606,140 @@ func _setup_mutation_ui() -> void:
 	_mut_overlay.hide()
 	ui_layer.add_child(_mut_overlay)
 
-	# 標題
+	# ── 標題（較大） ──────────────────────────────────
 	_mut_title = Label.new()
-	_mut_title.text = "⚡  突變選擇！"
-	_mut_title.position = Vector2(0.0, 108.0)
-	_mut_title.size = Vector2(1280.0, 64.0)
-	_mut_title.pivot_offset = Vector2(640.0, 32.0)
+	_mut_title.text = "⚡  突變降臨！"
+	_mut_title.position = Vector2(0.0, 48.0)
+	_mut_title.size = Vector2(1280.0, 72.0)
+	_mut_title.pivot_offset = Vector2(640.0, 36.0)
 	_mut_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_mut_title.add_theme_font_size_override("font_size", 54)
+	_mut_title.add_theme_font_size_override("font_size", 62)
 	_mut_title.add_theme_color_override("font_color", Color(1.0, 0.92, 0.28))
 	_mut_overlay.add_child(_mut_title)
 
-	# 副標
+	# ── 副標 ─────────────────────────────────────────
 	_mut_sub = Label.new()
 	_mut_sub.text = "選一個突變效果繼續遊戲"
-	_mut_sub.position = Vector2(0.0, 180.0)
-	_mut_sub.size = Vector2(1280.0, 36.0)
+	_mut_sub.position = Vector2(0.0, 124.0)
+	_mut_sub.size = Vector2(1280.0, 38.0)
 	_mut_sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_mut_sub.add_theme_font_size_override("font_size", 24)
+	_mut_sub.add_theme_font_size_override("font_size", 25)
 	_mut_sub.add_theme_color_override("font_color", Color(0.85, 0.78, 1.0, 0.80))
 	_mut_overlay.add_child(_mut_sub)
 
-	# 三張卡片
+	# ── 三張大型卡片 ──────────────────────────────────
 	var total_w := mutation_card_w * 3.0 + mutation_card_gap * 2.0
 	var start_x := (1280.0 - total_w) * 0.5
-	var card_y  := 228.0
+	var card_y  := 176.0
 
 	for i in range(3):
 		var card := ColorRect.new()
-		card.position = Vector2(start_x + i * (mutation_card_w + mutation_card_gap), card_y)
-		card.size     = Vector2(mutation_card_w, mutation_card_h)
-		card.color    = mutation_card_normal
+		card.position    = Vector2(start_x + i * (mutation_card_w + mutation_card_gap), card_y)
+		card.size        = Vector2(mutation_card_w, mutation_card_h)
+		card.color       = mutation_card_normal
+		card.pivot_offset = Vector2(mutation_card_w * 0.5, mutation_card_h * 0.5)
 		_mut_overlay.add_child(card)
 		_mut_cards.append(card)
 
-		# 邊框效果（稍大的暗色底層）
+		# 深色陰影底層
 		var border := ColorRect.new()
-		border.position = Vector2(-2.0, -2.0)
-		border.size     = Vector2(mutation_card_w + 4.0, mutation_card_h + 4.0)
-		border.color    = Color(0.0, 0.0, 0.0, 0.5)
+		border.position = Vector2(-3.0, -3.0)
+		border.size     = Vector2(mutation_card_w + 6.0, mutation_card_h + 6.0)
+		border.color    = Color(0.0, 0.0, 0.0, 0.62)
 		border.z_index  = -1
 		card.add_child(border)
+
+		# 頂部突變色條（10px，強調專屬顏色）
+		var top_accent := ColorRect.new()
+		top_accent.position = Vector2(0.0, 0.0)
+		top_accent.size     = Vector2(mutation_card_w, 10.0)
+		top_accent.color    = Color(1.0, 0.92, 0.28, 0.75)
+		card.add_child(top_accent)
+		_mut_card_tops.append(top_accent)
 
 		# 編號
 		var nl := Label.new()
 		nl.text     = str(i + 1)
-		nl.position = Vector2(10.0, 6.0)
-		nl.size     = Vector2(40.0, 28.0)
-		nl.add_theme_font_size_override("font_size", 22)
+		nl.position = Vector2(12.0, 14.0)
+		nl.size     = Vector2(44.0, 32.0)
+		nl.add_theme_font_size_override("font_size", 24)
 		nl.add_theme_color_override("font_color", Color(1.0, 1.0, 1.0, 0.45))
 		card.add_child(nl)
 		_mut_card_nl.append(nl)
 
-		# 突變名稱
+		# 突變名稱（更大字）
 		var tl := Label.new()
-		tl.position = Vector2(0.0, 40.0)
-		tl.size     = Vector2(mutation_card_w, 44.0)
+		tl.position = Vector2(0.0, 46.0)
+		tl.size     = Vector2(mutation_card_w, 52.0)
 		tl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		tl.add_theme_font_size_override("font_size", 28)
+		tl.add_theme_font_size_override("font_size", 32)
 		tl.add_theme_color_override("font_color", Color.WHITE)
 		card.add_child(tl)
 		_mut_card_tl.append(tl)
 
 		# 分隔線
 		var sep := ColorRect.new()
-		sep.position = Vector2(16.0, 92.0)
-		sep.size     = Vector2(mutation_card_w - 32.0, 2.0)
-		sep.color    = Color(1.0, 1.0, 1.0, 0.18)
+		sep.position = Vector2(18.0, 106.0)
+		sep.size     = Vector2(mutation_card_w - 36.0, 2.0)
+		sep.color    = Color(1.0, 1.0, 1.0, 0.22)
 		card.add_child(sep)
 
-		# 說明
+		# 說明（更大字）
 		var dl := Label.new()
-		dl.position = Vector2(10.0, 102.0)
-		dl.size     = Vector2(mutation_card_w - 20.0, mutation_card_h - 110.0)
+		dl.position     = Vector2(12.0, 116.0)
+		dl.size         = Vector2(mutation_card_w - 24.0, mutation_card_h - 126.0)
 		dl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		dl.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
 		dl.autowrap_mode        = TextServer.AUTOWRAP_WORD_SMART
-		dl.add_theme_font_size_override("font_size", 19)
-		dl.add_theme_color_override("font_color", Color(0.90, 0.88, 1.0, 0.90))
+		dl.add_theme_font_size_override("font_size", 22)
+		dl.add_theme_color_override("font_color", Color(0.92, 0.90, 1.0, 0.92))
 		card.add_child(dl)
 		_mut_card_dl.append(dl)
 
-	# 倒數進度條背景
-	var bar_y := 446.0
+	# ── 倒數進度條（更厚、更醒目）────────────────────
+	var bar_y := 454.0
 	_mut_bar_bg = ColorRect.new()
-	_mut_bar_bg.position = Vector2(240.0, bar_y)
-	_mut_bar_bg.size     = Vector2(800.0, 16.0)
-	_mut_bar_bg.color    = Color(0.15, 0.15, 0.15, 0.85)
+	_mut_bar_bg.position = Vector2(160.0, bar_y)
+	_mut_bar_bg.size     = Vector2(960.0, 22.0)
+	_mut_bar_bg.color    = Color(0.12, 0.12, 0.12, 0.90)
 	_mut_overlay.add_child(_mut_bar_bg)
 
 	_mut_bar_fill = ColorRect.new()
 	_mut_bar_fill.position = Vector2(0.0, 0.0)
-	_mut_bar_fill.size     = Vector2(800.0, 16.0)
+	_mut_bar_fill.size     = Vector2(960.0, 22.0)
 	_mut_bar_fill.color    = mutation_bar_color
 	_mut_bar_bg.add_child(_mut_bar_fill)
 
-	# 倒數文字
+	# ── 倒數文字 ──────────────────────────────────────
 	_mut_cd_label = Label.new()
-	_mut_cd_label.position = Vector2(0.0, 470.0)
-	_mut_cd_label.size     = Vector2(1280.0, 34.0)
+	_mut_cd_label.position = Vector2(0.0, 484.0)
+	_mut_cd_label.size     = Vector2(1280.0, 36.0)
 	_mut_cd_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_mut_cd_label.add_theme_font_size_override("font_size", 22)
+	_mut_cd_label.add_theme_font_size_override("font_size", 24)
 	_mut_cd_label.add_theme_color_override("font_color", Color(0.78, 0.95, 0.78, 0.88))
 	_mut_overlay.add_child(_mut_cd_label)
 
-	# 操作提示
+	# ── 操作提示 ──────────────────────────────────────
 	_mut_hint = Label.new()
 	_mut_hint.text     = "P1 滑鼠點擊選擇   ·   P2  J/L 移動 / Enter 確認"
-	_mut_hint.position = Vector2(0.0, 512.0)
+	_mut_hint.position = Vector2(0.0, 530.0)
 	_mut_hint.size     = Vector2(1280.0, 30.0)
 	_mut_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_mut_hint.add_theme_font_size_override("font_size", 19)
+	_mut_hint.add_theme_font_size_override("font_size", 20)
 	_mut_hint.add_theme_color_override("font_color", Color(0.72, 0.70, 0.88, 0.68))
 	_mut_overlay.add_child(_mut_hint)
+
+	# ── 突變生效公告（不在 overlay 內，遊戲中顯示）───
+	_mut_announce_label = Label.new()
+	_mut_announce_label.position     = Vector2(0.0, 290.0)
+	_mut_announce_label.size         = Vector2(1280.0, 88.0)
+	_mut_announce_label.pivot_offset = Vector2(640.0, 44.0)
+	_mut_announce_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_mut_announce_label.add_theme_font_size_override("font_size", 64)
+	_mut_announce_label.add_theme_color_override("font_color", Color(1.0, 0.92, 0.28))
+	_mut_announce_label.modulate = Color(1.0, 1.0, 1.0, 0.0)
+	_mut_announce_label.hide()
+	ui_layer.add_child(_mut_announce_label)
 
 
 func _run_countdown() -> void:

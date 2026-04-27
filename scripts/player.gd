@@ -97,6 +97,7 @@ var frozen: bool = false             # true 時鎖定所有移動與射擊（倒
 # ── 突變系統 hook（由 main.gd 寫入）────────────────
 var mutation_speed_mult : float = 1.0   # 突變③ 全場加速倍率
 var p2_always_grease    : bool  = false # 突變② 珍珠大爆發
+var proj_radius_mult    : float = 1.0   # 突變① 熱狗太興奮：子彈半徑倍率
 
 var shoot_cooldown   : float = 0.30
 var burst_count      : int   = 1      # =1 表示單發（P1 模式）
@@ -359,7 +360,7 @@ func _fire_projectile(dir: Vector2) -> void:
 	# 注入角色專屬參數（在 add_child 前設定，_ready 會用到）
 	proj.direction       = dir.normalized()
 	proj.shooter         = self
-	proj.proj_radius     = proj_radius
+	proj.proj_radius     = proj_radius * proj_radius_mult
 	proj.proj_speed      = proj_speed
 	proj.player_knockback    = proj_knockback
 	proj.enemy_fly_speed     = proj_enemy_speed
