@@ -1,0 +1,15 @@
+[gd_resource type="Resource" script_class="PlayerCharacter" format=3 uid="uid://bktknrqnyvj5r"]
+
+[ext_resource type="Script" uid="uid://dc80ntjnngs7v" path="res://scripts/player_character.gd" id="1_hotdog"]
+
+[resource]
+script = ExtResource("1_hotdog")
+character_name = "熱狗攤"
+body_color = Color(0.95, 0.4, 0.08, 1)
+shoot_cooldown = 0.55
+proj_radius = 18.0
+proj_speed = 320.0
+proj_knockback_base = 2200.0
+proj_enemy_speed = 1000.0
+proj_hit_stop = 5
+proj_color = Color(1, 0.55, 0.2, 1)

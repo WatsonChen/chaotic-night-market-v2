@@ -75,12 +75,14 @@ func _draw() -> void:
 			3.0
 		)
 
+	# 讀圖性配色 v1：stage1/2 外圈原本跟 PLAYER_RISK（黃）、PLAYER_HEAVY（橙）撞色，
+	# 改成更中性、更低飽和的漸層，見 docs/readability_palette.md
 	var pulse = 0.35 + 0.25 * sin(_time * 2.5)
-	var outer_color = Color(1.0, 0.80, 0.2, pulse)
-	var inner_glow = Color(1.0, 0.90, 0.5, pulse * 0.5)
+	var outer_color = Color(0.90, 0.82, 0.55, pulse)
+	var inner_glow = Color(0.95, 0.90, 0.75, pulse * 0.5)
 	if current_stage == 2:
-		outer_color = Color(1.0, 0.50, 0.08, pulse * 1.25)
-		inner_glow = Color(1.0, 0.78, 0.28, pulse * 0.72)
+		outer_color = Color(1.0, 0.70, 0.16, pulse * 1.25)   # 等同 GameplayPalette.OBJECTIVE_STAGE2
+		inner_glow = Color(1.0, 0.82, 0.40, pulse * 0.72)
 	elif current_stage >= 3:
 		var stage3_pulse = 0.55 + 0.45 * sin(_time * danger_flash_speed)
 		outer_color = Color(1.0, 0.18 + stage3_pulse * 0.14, 0.08, 0.78 + stage3_pulse * 0.18)

@@ -5,6 +5,17 @@ const ENEMY_SCENE = preload("res://scenes/enemy.tscn")
 const BIG_ENEMY_SCENE = preload("res://scenes/big_enemy.tscn")
 const GREASE_PUDDLE_SCRIPT = preload("res://scripts/grease_puddle.gd")
 const HIT_EFFECT_SCRIPT = preload("res://scripts/hit_effect.gd")
+const RESTOCK_EVENT_SCRIPT = preload("res://scripts/restock_event.gd")
+const HAZARD_SCENE = preload("res://scenes/hazard.tscn")
+const CHARACTER_HOTDOG         = preload("res://resources/characters/hotdog.tres")
+const CHARACTER_BUBBLE_TEA     = preload("res://resources/characters/bubble_tea.tres")
+const CHARACTER_CHICKEN_CUTLET = preload("res://resources/characters/chicken_cutlet.tres")  # 測試用：透過下面的 override 指定，不用改程式碼
+const CONTROL_P1_KEYBOARD      = preload("res://resources/controls/p1_keyboard.tres")
+const CONTROL_P2_KEYBOARD      = preload("res://resources/controls/p2_keyboard.tres")
+
+@export_group("Character Test Override")
+@export var p1_character_override : PlayerCharacter = null  # ← 測試用：在 Inspector 指定就會取代 P1 預設熱狗攤
+@export var p2_character_override : PlayerCharacter = null  # ← 測試用：例如指到 chicken_cutlet.tres 就能測雞排攤，不用動 _spawn_players()
 
 const ARENA = Rect2(160.0, 100.0, 960.0, 520.0)
 const MAP_CENTER = Vector2(640.0, 360.0)
@@ -38,6 +49,14 @@ const TXT_COUNTDOWN_GO = "GO！"
 @export var stage1_interval_multiplier: float = 1.0
 @export var stage2_interval_multiplier: float = 0.6
 @export var stage3_interval_multiplier: float = 0.35
+
+@export_group("Early Game Grace")
+# 開場緩衝期：疊加在 stage1/2/3 的乘數上，不取代、不改 stage 判斷本身。
+# 目的是讓玩家穩定活到第一個攤位事件（補貨），預設跟 restock_trigger_elapsed 對齊。
+@export var early_grace_duration           : float = 45.0  # ← 緩衝期秒數（建議跟 restock_trigger_elapsed 一致）
+@export var early_wave_interval_multiplier : float = 1.35  # ← 緩衝期間波次間隔乘數（>1 = 波次間隔拉長）
+@export var early_enemy_multiplier         : float = 0.65  # ← 緩衝期間每波數量乘數（<1 = 每波敵人變少）
+@export var early_disable_big_enemy        : bool  = true  # ← 緩衝期間完全不生成大型饕客，不管 stage 判斷到哪
 
 @export_group("Big Enemy Curve")
 @export var stage2_big_chance: float = 0.40
@@ -89,11 +108,11 @@ const TXT_COUNTDOWN_GO = "GO！"
 @export var shake_decay: float = 12.0
 @export var stage_banner_alpha: float = 0.34
 @export var stage_banner_hold: float = 1.6
-@export var stage2_banner_color: Color = Color(1.0, 0.48, 0.08)
+@export var stage2_banner_color: Color = Color(1.0, 0.70, 0.16)   # 讀圖性配色 v1：等同 OBJECTIVE_STAGE2，換掉原本撞 PLAYER_HEAVY 的橙
 @export var stage3_banner_color: Color = Color(1.0, 0.10, 0.08)
 
 @export_group("Ambient Tint")
-@export var stage2_tint_color: Color = Color(1.0, 0.48, 0.08)
+@export var stage2_tint_color: Color = Color(1.0, 0.70, 0.16)   # 讀圖性配色 v1：跟 stage2_banner_color 對齊
 @export var stage2_tint_alpha: float = 0.07
 @export var stage3_tint_color: Color = Color(1.0, 0.08, 0.08)
 @export var stage3_tint_alpha: float = 0.14
@@ -136,6 +155,57 @@ const TXT_COUNTDOWN_GO = "GO！"
 @export var comeback_spawn_pause: float = 2.0
 @export var comeback_cooldown: float = 10.0
 
+@export_group("Restock Event")
+@export var restock_trigger_elapsed  : float = 45.0  # ← 開場幾秒後觸發（一局只觸發一次）
+@export var restock_zone_radius      : float = 56.0  # ← 補貨區半徑（px）
+@export var restock_required_time    : float = 3.0   # ← 需累積站在區內幾秒才算成功
+@export var restock_timeout          : float = 14.0  # ← 事件總時限（秒），超過視為失敗
+@export var restock_success_relief   : int   = 2     # ← 成功：客訴 -N
+@export var restock_success_pause    : float = 2.0   # ← 成功：生成壓力暫停秒數
+@export var restock_fail_spawn_count : int   = 2     # ← 失敗：立即補生成幾隻敵人
+@export var restock_start_message    : String = "補貨時間！去補貨區集合！"
+@export var restock_success_message  : String = "補貨成功！壓力稍微緩解了"
+@export var restock_fail_message     : String = "補貨失敗……有人趁亂衝進來了"
+@export var restock_progress_decays_when_empty : bool  = false  # ← 關：離開只暫停（預設）；開：沒人在區內時緩慢衰減
+@export var restock_progress_decay_rate        : float = 0.5    # ← 衰減速度（每秒消耗的「已站秒數」），只有上面開啟時生效
+@export var restock_debug_key_enabled          : bool  = false  # ← 開發用：F9 立即觸發補貨事件，不影響正式預設行為
+@export var restock_trigger_elapsed_debug      : float = -1.0   # ← 開發用：>=0 時取代 restock_trigger_elapsed（例如設 10 秒），正式預設 -1 不生效
+@export var restock_flash_strength   : float = 0.34  # ← 事件開始時螢幕閃光強度
+@export var restock_flash_duration   : float = 0.40  # ← 事件開始時螢幕閃光持續（秒）
+@export var restock_shake_strength   : float = 5.0   # ← 事件開始時震動強度
+@export var restock_visual_scale     : float = 1.25  # ← 補貨區視覺半徑相對於實際判定半徑的放大倍率（只影響畫面，不影響判定）
+
+@export_group("Hazard Event")
+# 第二個中段事件：清除障礙。跟補貨事件是同一套「疊在時間軸上」的做法，
+# 命名刻意主題中立（不叫 clean_oil_event），見 docs/theme_dependency_audit.md。
+@export var hazard_trigger_elapsed  : float = 64.0  # ← 開場幾秒後「開始嘗試」觸發（實際觸發時間依下面的排程保護可能延後或跳過）
+@export var hazard_count_min        : int   = 2     # ← 場上同時生成幾個 hazard（下限）
+@export var hazard_count_max        : int   = 3     # ← 上限
+@export var hazard_hits_required    : int   = 3     # ← 每個 hazard 要被打幾下才會清除
+@export var hazard_radius           : float = 26.0  # ← hazard 判定/視覺半徑（px）
+@export var hazard_timeout          : float = 15.0  # ← 事件總時限上限（秒）；實際會被下面的排程保護再收緊，避免擠到 sprint
+@export var hazard_grease_interval  : float = 2.5   # ← hazard 存在期間每隔幾秒在自己附近生成一次滑地（壓力來源，方案 A）
+@export var hazard_success_relief   : int   = 1     # ← 成功：客訴 -N
+@export var hazard_success_pause    : float = 1.5   # ← 成功：生成壓力暫停秒數
+@export var hazard_fail_spawn_count : int   = 3     # ← 失敗：立即補生成幾隻敵人
+@export var hazard_start_message    : String = "警報！清除場上的障礙！"
+@export var hazard_success_message  : String = "障礙清除完畢！"
+@export var hazard_fail_message     : String = "障礙沒清完……情況更糟了"
+@export var hazard_flash_strength   : float = 0.34  # ← 事件開始時螢幕閃光強度
+@export var hazard_flash_duration   : float = 0.40  # ← 事件開始時螢幕閃光持續（秒）
+@export var hazard_shake_strength   : float = 5.0   # ← 事件開始時震動強度
+@export var hazard_debug_key_enabled          : bool  = false  # ← 開發用：H 立即觸發清除障礙事件，不影響正式預設行為
+
+@export_group("Hazard Event Scheduling")
+# 排程保護：避免 hazard 跟補貨事件疊在一起，也避免擠壓到最後衝刺前的節奏。
+# 只做簡單的狀態判斷（if 這個、if 那個），不是完整的事件排程器。
+@export var hazard_min_delay_after_restock : float = 8.0   # ← 補貨事件結束後至少要隔幾秒才能觸發 hazard
+@export var hazard_min_time_before_sprint  : float = 12.0  # ← 距離最後衝刺開始少於這個秒數，視為「太晚」
+@export var hazard_skip_if_too_late        : bool  = true  # ← 太晚時：true = 這局直接跳過；false = 照樣觸發，但 timeout 會被收緊到不擠壓 sprint
+
+@export_group("Run Summary Debug")
+@export var stats_preview_debug_key_enabled : bool = false  # ← 開發用：G 立即填假統計資料並結束遊戲，純粹用來測結算面板排版，不影響正式預設行為
+
 @export_group("Victory Timer")
 @export var game_duration: float = 120.0         # ← 遊戲總時長（秒）
 @export var warning_time: float = 30.0           # ← 最後幾秒進入警告狀態
@@ -160,8 +230,8 @@ const TXT_COUNTDOWN_GO = "GO！"
 @export var vignette_pulse_alpha_min: float = 0.10                  # ← 最淺透明度
 
 @export_group("Sprint Visual")
-@export var sprint_timer_color: Color = Color(1.0, 0.82, 0.18)      # ← 衝刺計時器主色（黃）
-@export var sprint_timer_flash_color: Color = Color(1.0, 0.52, 0.10) # ← 閃爍偏橘色
+@export var sprint_timer_color: Color = Color(1.0, 0.20, 0.15)      # ← 讀圖性配色 v1：等同 WARNING（原本的黃撞 PLAYER_RISK）
+@export var sprint_timer_flash_color: Color = Color(1.0, 0.35, 0.22) # ← 讀圖性配色 v1：等同 WARNING_FLASH
 @export var sprint_timer_blink_speed: float = 2.8                   # ← 計時器閃爍頻率（Hz）
 @export var sprint_brightness_color: Color = Color(1.0, 0.97, 0.68)  # ← 畫面亮度 pulse 顏色
 @export var sprint_brightness_alpha_max: float = 0.07               # ← pulse 最高透明度
@@ -241,6 +311,31 @@ var _next_grease_in: float = 999.0
 
 var _spawn_pause_timer: float = 0.0
 var _comeback_cooldown_left: float = 0.0
+
+# ── 補貨攤位事件狀態 ────────────────────────────────
+var _restock_triggered     : bool    = false   # 一局只觸發一次
+var _restock_active        : bool    = false
+var _restock_position      : Vector2 = Vector2.ZERO
+var _restock_occupied_time : float   = 0.0     # 累積站在區內的秒數（不因離開而歸零，只暫停）
+var _restock_time_left     : float   = 0.0     # 事件總時限倒數
+var _restock_node          : Node2D  = null
+var _restock_finished_at   : float   = -1.0   # 補貨事件結束當下的「已過秒數」，-1 表示還沒結束過；給 hazard 排程保護用
+var _restock_result        : String  = "not_triggered"   # "not_triggered" / "success" / "fail"，結算畫面用
+
+# ── 清除障礙事件狀態 ────────────────────────────────
+var _hazard_triggered : bool  = false   # 一局只觸發一次（含「判定太晚直接跳過」的情況）
+var _hazard_active    : bool  = false
+var _hazard_time_left : float = 0.0     # 事件總時限倒數
+var _hazard_total      : int   = 0       # 這次事件生成了幾個 hazard
+var _hazard_remaining  : int   = 0       # 還沒被清除的數量
+var _hazard_objects    : Array = []      # 目前存活的 hazard 節點，逾時收尾用
+var _hazard_result     : String = "not_triggered"   # "not_triggered" / "success" / "fail" / "skipped"，結算畫面用
+
+# ── 一局結算統計（v1，見 docs/core_fun_pillars.md「結算放大互雷故事」）───────
+# 只存在這一局的執行期記憶體裡，沒有存檔/沒有跨局累積，reload 場景就會歸零。
+var _run_stats : Dictionary = {}
+var _stats_debug_toggle : bool = false   # G 鍵用：交替顯示勝利/失敗面板，方便兩種都測到
+
 var _feedback_time: float = 0.0
 var _impulse_shake: float = 0.0
 var _sustained_shake_strength: float = 0.0   # 持續震動強度（duration-based）
@@ -249,11 +344,16 @@ var _complaint_color_locked: bool = false    # 客訴閃紅色鎖定旗標
 var _slowmo_token: int = 0
 
 var complaint_label: Label
+var character_debug_label: Label
 var game_over_panel: Panel
 var final_label: Label
 var spike_label: Label
 var stage_label: Label
 var comeback_label: Label
+var restock_label: Label
+var restock_progress_label: Label
+var hazard_label: Label
+var hazard_progress_label: Label
 var ambient_overlay: ColorRect
 var flash_overlay: ColorRect
 var stage_banner: ColorRect
@@ -262,6 +362,8 @@ var _flash_tween: Tween
 var _stage_notice_tween: Tween
 var _spike_notice_tween: Tween
 var _comeback_notice_tween: Tween
+var _restock_notice_tween: Tween
+var _hazard_notice_tween: Tween
 var _complaint_bump_tween: Tween
 
 var _time_left: float = 0.0
@@ -351,6 +453,8 @@ func _process(delta: float) -> void:
 	_update_victory_timer(delta)
 	_update_danger_vignette(delta)
 	_update_sprint_visual(delta)
+	_update_restock_event(delta)
+	_update_hazard_event(delta)
 	_comeback_cooldown_left = max(_comeback_cooldown_left - delta, 0.0)
 
 	if _spawn_pause_timer > 0.0:
@@ -366,6 +470,25 @@ func _process(delta: float) -> void:
 func _input(event: InputEvent) -> void:
 	if event.is_action_pressed("ui_cancel") and not is_game_over and not _countdown_active:
 		_toggle_pause()
+
+	# ── Debug：F9 或 R 立即觸發補貨事件，方便測試不用等 45 秒
+	#    （R 是備用鍵——Mac 上 F9 常被系統快捷鍵佔用，不方便按）──
+	if restock_debug_key_enabled and event is InputEventKey and event.pressed and not event.echo \
+			and (event.physical_keycode == KEY_F9 or event.physical_keycode == KEY_R) \
+			and not is_game_over and not _countdown_active and not _in_mutation:
+		_debug_trigger_restock_event()
+
+	# ── Debug：H 立即觸發清除障礙事件 ──
+	if hazard_debug_key_enabled and event is InputEventKey and event.pressed and not event.echo \
+			and event.physical_keycode == KEY_H \
+			and not is_game_over and not _countdown_active and not _in_mutation:
+		_debug_trigger_hazard_event()
+
+	# ── Debug：G 立即填假統計資料 + 結束遊戲，純粹用來測結算面板排版 ──
+	if stats_preview_debug_key_enabled and event is InputEventKey and event.pressed and not event.echo \
+			and event.physical_keycode == KEY_G \
+			and not is_game_over and not _countdown_active and not _in_mutation:
+		_debug_fill_fake_stats()
 
 
 func _reset_spawn_timers() -> void:
@@ -469,15 +592,25 @@ func _end_spike() -> void:
 
 
 func _spawn_players() -> void:
+	var p1_character = p1_character_override if p1_character_override != null else CHARACTER_HOTDOG
+	var p2_character = p2_character_override if p2_character_override != null else CHARACTER_BUBBLE_TEA
+
 	var p1 = PLAYER_SCENE.instantiate()
 	p1.player_index = 1
+	p1.character = p1_character
+	p1.control_profile = CONTROL_P1_KEYBOARD
 	p1.position = Vector2(380, 360)
 	players_node.add_child(p1)
 
 	var p2 = PLAYER_SCENE.instantiate()
 	p2.player_index = 2
+	p2.character = p2_character
+	p2.control_profile = CONTROL_P2_KEYBOARD
 	p2.position = Vector2(900, 360)
 	players_node.add_child(p2)
+
+	# 測試可見性：畫面上顯示目前 P1/P2 用的是哪個角色（見 docs/playtest_checklist.md）
+	character_debug_label.text = "P1：%s　P2：%s" % [p1_character.character_name, p2_character.character_name]
 
 
 func _build_wave_queue() -> void:
@@ -497,6 +630,9 @@ func _build_wave_queue() -> void:
 
 
 func _roll_big_enemy_spawn(stage: int) -> void:
+	if early_disable_big_enemy and _in_early_grace():
+		return   # 緩衝期完全不生大型饕客，不管當下 stage 判斷到哪
+
 	var bm = mutation_big_mult if _mut_big_active else 1.0   # 突變④ 倍率
 
 	if stage == 2:
@@ -595,28 +731,94 @@ func _get_stage() -> int:
 	return 1
 
 
+## 外部呼叫用（player.gd / projectile.gd 等透過 get_tree().current_scene 呼叫）：
+## 累加一局結算統計。key 保持主題中立命名（例如 "chain_enemy_hits"），
+## 不需要事先註冊，第一次呼叫就會自動從 0 開始算。
+func record_stat(key: String, amount: int = 1) -> void:
+	_run_stats[key] = _run_stats.get(key, 0) + amount
+
+
+# ═══════════════════════════════════════════════════
+#  一局結算文字（v1）——擴充既有的 win/game over panel，
+#  不是新 UI 系統。直接組一段多行文字塞進既有的
+#  final_label / win_final_label。
+# ═══════════════════════════════════════════════════
+
+func _restock_result_text() -> String:
+	match _restock_result:
+		"success": return "成功"
+		"fail":    return "失敗"
+		_:         return "未觸發"
+
+
+func _hazard_result_text() -> String:
+	match _hazard_result:
+		"success": return "成功"
+		"fail":    return "失敗"
+		"skipped": return "跳過"
+		_:         return "未觸發"
+
+
+func _build_run_summary_text(elapsed: float, reached_end: bool) -> String:
+	var em = int(elapsed) / 60
+	var es = int(elapsed) % 60
+	var survival = "%d:%02d" % [em, es]
+	if reached_end:
+		survival += "（撐到最後）"
+
+	return "客訴：%d / %d\n存活：%s\n補貨：%s\n障礙清除：%s\n友火：%d 次\n連鎖撞飛敵人：%d 次\n連鎖撞飛隊友：%d 次\n大型破甲：%d 次" % [
+		complaint_count, max_complaints,
+		survival,
+		_restock_result_text(),
+		_hazard_result_text(),
+		_run_stats.get("friendly_fire_hits", 0),
+		_run_stats.get("chain_enemy_hits", 0),
+		_run_stats.get("chain_player_hits", 0),
+		_run_stats.get("big_enemy_breaks", 0),
+	]
+
+
+## 開場 early_grace_duration 秒內回傳 true。跟 _time_left 走同一個時鐘，
+## 倒數/暫停/突變選擇期間 _time_left 不會動，緩衝期也會跟著暫停，行為跟其他
+## 依賴 _time_left 的系統（sprint、warning）一致。
+func _in_early_grace() -> bool:
+	return (game_duration - _time_left) < early_grace_duration
+
+
 func _get_enemy_multiplier() -> float:
 	if _is_sprint:
 		return sprint_enemy_multiplier
+
+	var mult := stage1_enemy_multiplier
 	match _get_stage():
 		2:
-			return stage2_enemy_multiplier
+			mult = stage2_enemy_multiplier
 		3:
-			return stage3_enemy_multiplier
+			mult = stage3_enemy_multiplier
 		_:
-			return stage1_enemy_multiplier
+			mult = stage1_enemy_multiplier
+
+	if _in_early_grace():
+		mult *= early_enemy_multiplier   # 疊加，不取代——就算緩衝期內客訴衝到 stage2/3 也還是會被壓低
+	return mult
 
 
 func _get_interval_multiplier() -> float:
 	if _in_sprint_mode:
 		return sprint_wave_interval_multiplier   # 衝刺期間強制最快間隔
+
+	var mult := stage1_interval_multiplier
 	match _get_stage():
 		2:
-			return stage2_interval_multiplier
+			mult = stage2_interval_multiplier
 		3:
-			return stage3_interval_multiplier
+			mult = stage3_interval_multiplier
 		_:
-			return stage1_interval_multiplier
+			mult = stage1_interval_multiplier
+
+	if _in_early_grace():
+		mult *= early_wave_interval_multiplier   # 疊加，理由同上
+	return mult
 
 
 func _on_enemy_reach_center(complaint_delta: int = 1) -> void:
@@ -638,6 +840,7 @@ func _on_big_enemy_armor_broken(break_position: Vector2) -> void:
 		return
 
 	audio_mgr.play(audio_mgr.BIG_BREAK)   # 大型破防音效
+	record_stat("big_enemy_breaks")
 	var triggered_comeback = complaint_count >= comeback_min_complaints and _comeback_cooldown_left <= 0.0
 	_spawn_break_burst(break_position)
 	_play_screen_flash(Color(1.0, 1.0, 1.0), break_flash_strength, break_flash_duration)
@@ -784,6 +987,8 @@ func _show_sprint_banner() -> void:
 
 
 func _show_spike_warning() -> void:
+	audio_mgr.play(audio_mgr.SPIKE_WARNING)   # 失控潮警告音（跟衝刺開始共用，cooldown 由 audio_manager 擋）
+
 	if _spike_notice_tween != null:
 		_spike_notice_tween.kill()
 
@@ -817,6 +1022,388 @@ func _show_comeback_notice() -> void:
 	_comeback_notice_tween.tween_interval(1.7)
 	_comeback_notice_tween.tween_property(comeback_label, "modulate", Color(1, 1, 1, 0), 0.40)
 	_comeback_notice_tween.tween_callback(comeback_label.hide)
+
+
+# ═══════════════════════════════════════════════════
+#  補貨攤位事件（第一關 prototype 的第一個攤位事件）
+#
+#  沿用現有 stage/wave/spike 時間軸，不新增關卡系統：
+#  只是在固定時間點插入一段「需要玩家離開安全位置」的
+#  小任務。狀態機在這裡（main.gd），視覺是獨立的
+#  restock_event.gd（仿 grease_puddle.gd 的做法）。
+# ═══════════════════════════════════════════════════
+
+func _update_restock_event(delta: float) -> void:
+	var effective_trigger_elapsed = restock_trigger_elapsed_debug if restock_trigger_elapsed_debug >= 0.0 else restock_trigger_elapsed
+	if not _restock_triggered and _time_left <= game_duration - effective_trigger_elapsed:
+		_restock_triggered = true
+		_start_restock_event()
+
+	if not _restock_active:
+		return
+
+	_restock_time_left -= delta
+
+	var occupied := false
+	for p in get_tree().get_nodes_in_group("players"):
+		if p.global_position.distance_to(_restock_position) < restock_zone_radius:
+			occupied = true
+			break
+
+	if occupied:
+		_restock_occupied_time += delta
+	elif restock_progress_decays_when_empty:
+		_restock_occupied_time = max(_restock_occupied_time - delta * restock_progress_decay_rate, 0.0)
+	# else：沒開衰減時維持預設行為——沒人在區內就單純暫停，不會歸零
+
+	if _restock_node != null:
+		_restock_node.progress = clamp(_restock_occupied_time / restock_required_time, 0.0, 1.0)
+		_restock_node.occupied = occupied
+
+	restock_progress_label.text = "補貨進度 %.1f / %.1f 秒（剩餘 %d 秒）%s" % [
+		_restock_occupied_time, restock_required_time, ceili(max(_restock_time_left, 0.0)),
+		"— 有人在區內" if occupied else "— 快去站進補貨區！"
+	]
+
+	if _restock_occupied_time >= restock_required_time:
+		_finish_restock_event(true)
+	elif _restock_time_left <= 0.0:
+		_finish_restock_event(false)
+
+
+## Debug 專用：無視 45 秒等待與「一局一次」限制，立即開始補貨事件。
+## 若事件已經在進行中則不重複觸發。正式流程完全不會呼叫這個函式。
+func _debug_trigger_restock_event() -> void:
+	if _restock_active:
+		return
+	_restock_triggered = true
+	_start_restock_event()
+
+
+func _start_restock_event() -> void:
+	_restock_active        = true
+	_restock_occupied_time = 0.0
+	_restock_time_left     = restock_timeout
+	_restock_position      = _restock_zone_position(_pick_restock_edge())
+
+	_restock_node = Node2D.new()
+	_restock_node.set_script(RESTOCK_EVENT_SCRIPT)
+	_restock_node.radius = restock_zone_radius * restock_visual_scale   # 只放大畫面，判定半徑仍是 restock_zone_radius
+	world_node.add_child(_restock_node)
+	_restock_node.global_position = _restock_position
+
+	audio_mgr.play(audio_mgr.SPIKE_WARNING)   # 借用現有警報音，不新增音效常數
+	_play_screen_flash(GameplayPalette.TASK_MARKER, restock_flash_strength, restock_flash_duration)   # 讀圖性配色 v1
+	_add_shake(restock_shake_strength)
+	_show_restock_banner(restock_start_message)
+	restock_progress_label.show()
+
+
+func _finish_restock_event(success: bool) -> void:
+	_restock_active = false
+	_restock_finished_at = game_duration - _time_left   # 給 hazard 的排程保護算「補貨結束後過了多久」用
+	_restock_result = "success" if success else "fail"
+	restock_progress_label.hide()
+
+	if _restock_node != null:
+		_restock_node.play_result(success)   # 節點自己播完結果動畫後 queue_free()
+		_restock_node = null
+
+	if success:
+		audio_mgr.play(audio_mgr.MUTATION_APPLY)   # 借用現有「正向確認」音，不新增常數
+		_set_complaint_count(complaint_count - restock_success_relief, true)
+		_spawn_pause_timer = max(_spawn_pause_timer, restock_success_pause)
+		_spawn_green_burst(_restock_position)
+		_show_restock_banner(restock_success_message)
+	else:
+		audio_mgr.play(audio_mgr.COMPLAINT)   # 借用現有「壞消息」音，不新增常數
+		var edges = [0, 1, 2, 3]
+		edges.shuffle()
+		for i in range(restock_fail_spawn_count):
+			_spawn_enemy_at(_edge_position(edges[i % edges.size()]))
+		_show_restock_banner(restock_fail_message)
+
+
+## 從四個邊緣裡挑一個生成補貨區：算「該邊緣中點」到最近玩家的直線距離，
+## 排序後只從距離較近的兩個候選裡隨機選，避免補貨區出現在兩位玩家都很遠的角落。
+## 不做路徑尋路，純直線距離，跟專案裡其他防呆判斷（例如 KNOCKBACK_HIT_RANGE）同一個等級。
+func _pick_restock_edge() -> int:
+	var scored : Array = []
+	for edge in range(4):
+		var mid = _restock_edge_midpoint(edge)
+		var nearest := INF
+		for p in get_tree().get_nodes_in_group("players"):
+			nearest = minf(nearest, p.global_position.distance_to(mid))
+		scored.append({"edge": edge, "dist": nearest})
+
+	scored.sort_custom(func(a, b): return a["dist"] < b["dist"])
+	var near_pool = scored.slice(0, 2)
+	return near_pool[randi() % near_pool.size()]["edge"]
+
+
+func _restock_edge_midpoint(edge: int) -> Vector2:
+	var ax = ARENA.position.x
+	var ay = ARENA.position.y
+	var ex = ARENA.end.x
+	var ey = ARENA.end.y
+	match edge:
+		0:
+			return Vector2((ax + ex) / 2.0, ay)
+		1:
+			return Vector2((ax + ex) / 2.0, ey)
+		2:
+			return Vector2(ax, (ay + ey) / 2.0)
+		3:
+			return Vector2(ex, (ay + ey) / 2.0)
+	return MAP_CENTER
+
+
+func _restock_zone_position(edge: int) -> Vector2:
+	# 跟 _edge_position() 邏輯類似，但往內縮，讓玩家真的走得到
+	var ax = ARENA.position.x
+	var ay = ARENA.position.y
+	var ex = ARENA.end.x
+	var ey = ARENA.end.y
+	var inset = restock_zone_radius + 34.0
+	match edge:
+		0:
+			return Vector2(randf_range(ax + inset, ex - inset), ay + inset)
+		1:
+			return Vector2(randf_range(ax + inset, ex - inset), ey - inset)
+		2:
+			return Vector2(ax + inset, randf_range(ay + inset, ey - inset))
+		3:
+			return Vector2(ex - inset, randf_range(ay + inset, ey - inset))
+	return MAP_CENTER
+
+
+func _show_restock_banner(text: String) -> void:
+	_hide_hazard_banner_now()   # 兩個事件的 toast 共用同一塊畫面位置，開始前先確保對方沒有還在淡出
+
+	if _restock_notice_tween != null:
+		_restock_notice_tween.kill()
+
+	restock_label.text = text
+	restock_label.modulate = Color(1, 1, 1, 0)
+	restock_label.scale = Vector2.ONE * 0.72
+	restock_label.show()
+
+	_restock_notice_tween = create_tween()
+	_restock_notice_tween.tween_property(restock_label, "modulate", Color(1, 1, 1, 1), 0.18)
+	_restock_notice_tween.parallel().tween_property(restock_label, "scale", Vector2.ONE * 1.08, 0.18)
+	_restock_notice_tween.tween_property(restock_label, "scale", Vector2.ONE, 0.12)
+	_restock_notice_tween.tween_interval(2.6)   # 加上淡入淡出，總可見時間 > 3 秒，確保「至少 1.5 秒」的要求有餘裕
+	_restock_notice_tween.tween_property(restock_label, "modulate", Color(1, 1, 1, 0), 0.40)
+	_restock_notice_tween.tween_callback(restock_label.hide)
+
+
+# ═══════════════════════════════════════════════════
+#  清除障礙事件（第一關 prototype 第二個攤位事件）
+#
+#  跟補貨事件同一套做法：疊在現有時間軸上，不新增關卡系統。
+#  狀態機在 main.gd，個別 hazard 物件（視覺+碰撞+命中計數）
+#  是獨立的 hazard_object.gd，一次事件生成多個。
+# ═══════════════════════════════════════════════════
+
+func _update_hazard_event(delta: float) -> void:
+	if not _hazard_triggered and (game_duration - _time_left) >= hazard_trigger_elapsed:
+		_try_trigger_hazard_event()
+
+	if not _hazard_active:
+		return
+
+	_hazard_time_left -= delta
+	hazard_progress_label.text = "清除障礙 %d / %d（剩餘 %d 秒）" % [
+		_hazard_total - _hazard_remaining, _hazard_total, ceili(max(_hazard_time_left, 0.0))
+	]
+
+	if _hazard_time_left <= 0.0:
+		_finish_hazard_event(false)
+
+
+## 排程保護：到了 hazard_trigger_elapsed 不代表馬上觸發，還要確認
+## ①補貨事件沒有還在進行 ②離補貨事件結束有留緩衝 ③沒有太靠近最後衝刺。
+## 只要還沒滿足，就先不設 _hazard_triggered，讓下一幀再檢查一次
+## （等於「延後」）；真的判定太晚才會直接標記跳過。
+func _try_trigger_hazard_event() -> void:
+	if _restock_active:
+		return   # 補貨還在進行，先不要疊上去，下一幀再檢查
+
+	var elapsed = game_duration - _time_left
+	if _restock_finished_at >= 0.0 and (elapsed - _restock_finished_at) < hazard_min_delay_after_restock:
+		return   # 補貨剛結束沒多久，留個緩衝再說
+
+	var time_before_sprint = _time_left - warning_time   # 距離最後衝刺開始還有幾秒
+	if time_before_sprint < hazard_min_time_before_sprint:
+		if hazard_skip_if_too_late or time_before_sprint <= 0.0:
+			_hazard_triggered = true   # 太晚了，這局直接跳過，不要硬塞一個沒空間跑完的事件
+			_hazard_result    = "skipped"
+			return
+		# hazard_skip_if_too_late == false 且還有一點時間：照樣觸發，
+		# _start_hazard_event() 會把 timeout 收緊到不擠壓 sprint
+
+	_hazard_triggered = true
+	_start_hazard_event()
+
+
+## Debug 專用：無視 hazard_trigger_elapsed 與「一局一次」限制，立即開始清除障礙事件。
+## 仍然尊重「補貨事件還在進行中就不啟動」這條——這條是真正的排程保護，
+## debug 鍵繞過它會直接製造出這輪要修的那個疊字/搶戲問題，沒有意義。
+func _debug_trigger_hazard_event() -> void:
+	if _hazard_active:
+		return
+	if _restock_active:
+		return
+	_hazard_triggered = true
+	_start_hazard_event()
+
+
+## Debug 專用：不用真的打出所有事件，直接塞一組看得出差異的假資料進 _run_stats，
+## 再交替觸發勝利/失敗畫面，純粹用來看結算面板排版撐不撐得住、擠不擠。
+## 對正式玩法沒有任何影響——這局本來就要結束了，數字是假的，遊戲不會繼續玩下去。
+func _debug_fill_fake_stats() -> void:
+	_run_stats["friendly_fire_hits"] = randi_range(6, 24)
+	_run_stats["chain_enemy_hits"]   = randi_range(10, 40)
+	_run_stats["chain_player_hits"]  = randi_range(2, 12)
+	_run_stats["big_enemy_breaks"]   = randi_range(0, 5)
+	_restock_result = ["not_triggered", "success", "fail"][randi() % 3]
+	_hazard_result   = ["not_triggered", "success", "fail", "skipped"][randi() % 4]
+
+	_stats_debug_toggle = not _stats_debug_toggle
+	if _stats_debug_toggle:
+		_trigger_win()
+	else:
+		_trigger_game_over()
+
+
+func _start_hazard_event() -> void:
+	_hazard_active = true
+
+	# timeout 上限是 hazard_timeout，但如果留給 sprint 前的時間不夠，收緊到不會擠壓過去
+	# （這裡的 2.0 是額外安全邊界，4.0 是不管怎樣都給玩家一個能玩的最短時間）
+	var time_before_sprint = _time_left - warning_time
+	var effective_timeout = hazard_timeout
+	if time_before_sprint > 0.0 and time_before_sprint < effective_timeout:
+		effective_timeout = max(time_before_sprint - 2.0, 4.0)
+	_hazard_time_left = effective_timeout
+
+	_hazard_objects.clear()
+
+	_hazard_total     = randi_range(hazard_count_min, hazard_count_max)
+	_hazard_remaining = _hazard_total
+
+	var placed : Array[Vector2] = []
+	for i in range(_hazard_total):
+		var pos = _hazard_spawn_position(placed)
+		placed.append(pos)
+
+		var hazard = HAZARD_SCENE.instantiate()
+		hazard.hits_required   = hazard_hits_required
+		hazard.radius          = hazard_radius
+		hazard.grease_interval = hazard_grease_interval
+		world_node.add_child(hazard)
+		hazard.global_position = pos
+		hazard.cleared.connect(_on_hazard_cleared)
+		_hazard_objects.append(hazard)
+
+	audio_mgr.play(audio_mgr.SPIKE_WARNING)   # 借用現有警報音，不新增音效常數
+	_play_screen_flash(GameplayPalette.HAZARD, hazard_flash_strength, hazard_flash_duration)   # 讀圖性配色 v1
+	_add_shake(hazard_shake_strength)
+	_show_hazard_banner(hazard_start_message)
+	hazard_progress_label.show()
+
+
+func _on_hazard_cleared() -> void:
+	if not _hazard_active:
+		return
+	_hazard_remaining = max(_hazard_remaining - 1, 0)
+	if _hazard_remaining <= 0:
+		_finish_hazard_event(true)
+
+
+func _finish_hazard_event(success: bool) -> void:
+	_hazard_active = false
+	_hazard_result = "success" if success else "fail"
+	hazard_progress_label.hide()
+
+	for hazard in _hazard_objects:
+		if is_instance_valid(hazard):
+			hazard.force_clear()   # 逾時收尾：強制清掉還沒打完的，不留在場上
+	_hazard_objects.clear()
+
+	if success:
+		audio_mgr.play(audio_mgr.MUTATION_APPLY)   # 借用現有「正向確認」音，不新增常數
+		if hazard_success_relief > 0:
+			_set_complaint_count(complaint_count - hazard_success_relief, true)
+		_spawn_pause_timer = max(_spawn_pause_timer, hazard_success_pause)
+		_show_hazard_banner(hazard_success_message)
+	else:
+		audio_mgr.play(audio_mgr.COMPLAINT)   # 借用現有「壞消息」音，不新增常數
+		var edges = [0, 1, 2, 3]
+		edges.shuffle()
+		for i in range(hazard_fail_spawn_count):
+			_spawn_enemy_at(_edge_position(edges[i % edges.size()]))
+		_show_hazard_banner(hazard_fail_message)
+
+
+## 在中央壓力區外圍找一個生成點，簡單避開跟已放置的 hazard 太近（最多重試幾次，不做嚴謹保證）
+func _hazard_spawn_position(already_placed: Array[Vector2]) -> Vector2:
+	var min_gap = hazard_radius * 2.0 + 40.0
+	for _attempt in range(6):
+		var angle = randf() * TAU
+		var dist  = randf_range(160.0, 380.0)
+		var pos   = MAP_CENTER + Vector2(cos(angle), sin(angle)) * dist
+		pos.x = clamp(pos.x, ARENA.position.x + hazard_radius + 20.0, ARENA.end.x - hazard_radius - 20.0)
+		pos.y = clamp(pos.y, ARENA.position.y + hazard_radius + 20.0, ARENA.end.y - hazard_radius - 20.0)
+
+		var ok = true
+		for other in already_placed:
+			if pos.distance_to(other) < min_gap:
+				ok = false
+				break
+		if ok:
+			return pos
+
+	# 六次都撞到別人：就用最後一次算出來的位置，寧可稍微擠一點也不要卡住生成
+	var angle = randf() * TAU
+	var dist  = randf_range(160.0, 380.0)
+	var pos   = MAP_CENTER + Vector2(cos(angle), sin(angle)) * dist
+	return Vector2(
+		clamp(pos.x, ARENA.position.x + hazard_radius + 20.0, ARENA.end.x - hazard_radius - 20.0),
+		clamp(pos.y, ARENA.position.y + hazard_radius + 20.0, ARENA.end.y - hazard_radius - 20.0)
+	)
+
+
+func _show_hazard_banner(text: String) -> void:
+	_hide_restock_banner_now()   # 理由同上，反過來也要清
+
+	if _hazard_notice_tween != null:
+		_hazard_notice_tween.kill()
+
+	hazard_label.text = text
+	hazard_label.modulate = Color(1, 1, 1, 0)
+	hazard_label.scale = Vector2.ONE * 0.72
+	hazard_label.show()
+
+	_hazard_notice_tween = create_tween()
+	_hazard_notice_tween.tween_property(hazard_label, "modulate", Color(1, 1, 1, 1), 0.18)
+	_hazard_notice_tween.parallel().tween_property(hazard_label, "scale", Vector2.ONE * 1.08, 0.18)
+	_hazard_notice_tween.tween_property(hazard_label, "scale", Vector2.ONE, 0.12)
+	_hazard_notice_tween.tween_interval(2.6)
+	_hazard_notice_tween.tween_property(hazard_label, "modulate", Color(1, 1, 1, 0), 0.40)
+	_hazard_notice_tween.tween_callback(hazard_label.hide)
+
+
+func _hide_restock_banner_now() -> void:
+	if _restock_notice_tween != null:
+		_restock_notice_tween.kill()
+	restock_label.hide()
+
+
+func _hide_hazard_banner_now() -> void:
+	if _hazard_notice_tween != null:
+		_hazard_notice_tween.kill()
+	hazard_label.hide()
 
 
 func _stage_flash_color(stage: int) -> Color:
@@ -1064,9 +1651,7 @@ func _trigger_game_over() -> void:
 	audio_mgr.play(audio_mgr.LOSE)   # 失敗音效
 	_clear_state_overlays()
 	var elapsed = game_duration - _time_left
-	var em = int(elapsed) / 60
-	var es = int(elapsed) % 60
-	final_label.text = "共 %d 次客訴\n撐了 %d:%02d" % [complaint_count, em, es]
+	final_label.text = _build_run_summary_text(elapsed, false)
 	game_over_panel.show()
 
 
@@ -1099,6 +1684,7 @@ func _update_victory_timer(delta: float) -> void:
 
 func _start_sprint_pressure() -> void:
 	audio_mgr.set_sprint_mode(true)   # BGM 加速到 160 BPM
+	audio_mgr.play(audio_mgr.SPIKE_WARNING)   # 衝刺開始警告音；若跟失控潮警告太接近會被 cooldown 擋掉重複播放
 	# 立刻觸發一波（把 wave timer 推到上限）
 	_wave_timer = _next_wave_in
 
@@ -1131,7 +1717,7 @@ func _trigger_win() -> void:
 	audio_mgr.play(audio_mgr.WIN)   # 勝利音效
 	_add_sustained_shake(win_shake_strength, win_shake_duration)
 	_clear_state_overlays()
-	win_final_label.text = "本場客訴：%d 次" % complaint_count
+	win_final_label.text = _build_run_summary_text(game_duration, true)
 	win_panel.show()
 
 
@@ -1183,6 +1769,21 @@ func _clear_state_overlays() -> void:
 	sprint_overlay.color    = Color(sprint_brightness_color.r, sprint_brightness_color.g, sprint_brightness_color.b, 0.0)
 	sprint_label.modulate   = Color(1.0, 1.0, 1.0, 0.0)
 	sprint_label.visible    = false
+
+	# 遊戲結束時若補貨事件還在進行，直接收掉，避免半成品視覺殘留在結算畫面後面
+	_restock_active = false
+	restock_progress_label.hide()
+	if _restock_node != null:
+		_restock_node.queue_free()
+		_restock_node = null
+
+	# 同理：清除障礙事件還在進行時，把場上剩下的 hazard 一起收掉
+	_hazard_active = false
+	hazard_progress_label.hide()
+	for hazard in _hazard_objects:
+		if is_instance_valid(hazard):
+			hazard.force_clear()
+	_hazard_objects.clear()
 
 
 func _draw() -> void:
@@ -1418,7 +2019,8 @@ func _hide_mutation_choice(slot: int) -> void:
 	var chosen_id : int = _mut_choices[slot]
 	var d : Dictionary = _mut_def(chosen_id)
 
-	# 突變生效瞬間：閃光 + 震動 + 公告文字 + 慢動作
+	# 突變生效瞬間：閃光 + 震動 + 公告文字 + 慢動作 + 音效
+	audio_mgr.play(audio_mgr.MUTATION_APPLY)   # 突變生效音（跟選單開啟的 MUTATION 是不同時間點）
 	_play_screen_flash(d["color"], 0.65, 0.35)
 	_add_sustained_shake(7.0, 0.30)
 	_show_mutation_announce(d["title"], d["color"])
@@ -1803,6 +2405,14 @@ func _setup_ui() -> void:
 	flash_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	ui_layer.add_child(flash_overlay)
 
+	character_debug_label = Label.new()
+	character_debug_label.text = "P1：？　P2：？"   # _spawn_players() 會馬上覆蓋
+	character_debug_label.position = Vector2(16, 10)
+	character_debug_label.size = Vector2(360, 26)
+	character_debug_label.add_theme_font_size_override("font_size", 16)
+	character_debug_label.add_theme_color_override("font_color", Color(0.85, 0.85, 0.75, 0.85))
+	ui_layer.add_child(character_debug_label)
+
 	complaint_label = Label.new()
 	complaint_label.text = "客訴 0 / %d" % max_complaints
 	complaint_label.position = Vector2(520, 12)
@@ -1849,9 +2459,48 @@ func _setup_ui() -> void:
 	comeback_label.hide()
 	ui_layer.add_child(comeback_label)
 
+	restock_label = Label.new()
+	restock_label.position = Vector2(160, 226)
+	restock_label.size = Vector2(960, 46)
+	restock_label.pivot_offset = Vector2(480, 23)
+	restock_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	restock_label.add_theme_font_size_override("font_size", 30)
+	restock_label.add_theme_color_override("font_color", Color(0.55, 1.0, 0.75))   # 讀圖性配色 v1：TASK_MARKER 系
+	restock_label.hide()
+	ui_layer.add_child(restock_label)
+
+	restock_progress_label = Label.new()
+	restock_progress_label.position = Vector2(160, 270)
+	restock_progress_label.size = Vector2(960, 32)
+	restock_progress_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	restock_progress_label.add_theme_font_size_override("font_size", 20)
+	restock_progress_label.add_theme_color_override("font_color", Color(0.65, 0.95, 0.80))   # 讀圖性配色 v1
+	restock_progress_label.hide()
+	ui_layer.add_child(restock_progress_label)
+
+	# 跟補貨事件共用同一塊畫面位置——兩個事件不會同時進行，不用另外找位置
+	hazard_label = Label.new()
+	hazard_label.position = Vector2(160, 226)
+	hazard_label.size = Vector2(960, 46)
+	hazard_label.pivot_offset = Vector2(480, 23)
+	hazard_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	hazard_label.add_theme_font_size_override("font_size", 30)
+	hazard_label.add_theme_color_override("font_color", Color(0.80, 0.55, 1.0))   # 讀圖性配色 v1：HAZARD 系
+	hazard_label.hide()
+	ui_layer.add_child(hazard_label)
+
+	hazard_progress_label = Label.new()
+	hazard_progress_label.position = Vector2(160, 270)
+	hazard_progress_label.size = Vector2(960, 32)
+	hazard_progress_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	hazard_progress_label.add_theme_font_size_override("font_size", 20)
+	hazard_progress_label.add_theme_color_override("font_color", Color(0.85, 0.70, 1.0))   # 讀圖性配色 v1
+	hazard_progress_label.hide()
+	ui_layer.add_child(hazard_progress_label)
+
 	game_over_panel = Panel.new()
-	game_over_panel.position = Vector2(390, 185)
-	game_over_panel.size = Vector2(500, 350)
+	game_over_panel.position = Vector2(380, 70)   # 加大過的面板：要放下 8 行結算統計，見 _build_run_summary_text()
+	game_over_panel.size = Vector2(520, 580)
 	game_over_panel.hide()
 	ui_layer.add_child(game_over_panel)
 
@@ -1869,8 +2518,12 @@ func _setup_ui() -> void:
 	vbox.add_child(title)
 
 	final_label = Label.new()
-	final_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	final_label.add_theme_font_size_override("font_size", 22)
+	# 統計是「標籤：數字」的清單，逐行長度不一，靠左對齊比置中好掃視；
+	# 但整塊還是要在面板裡置中，不要貼著左邊——size_flags 用 SHRINK_CENTER
+	# 讓 Label 自己收縮到內容寬度、再整塊置中，裡面的文字才用左對齊。
+	final_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	final_label.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	final_label.add_theme_font_size_override("font_size", 20)   # 從 22 降到 20：現在是 8 行結算文字，不是 2 行
 	final_label.add_theme_color_override("font_color", Color(0.9, 0.9, 0.9))
 	vbox.add_child(final_label)
 
@@ -1899,8 +2552,8 @@ func _setup_ui() -> void:
 
 	# ── 勝利面板 ────────────────────────────────────────
 	win_panel = Panel.new()
-	win_panel.position = Vector2(390, 185)
-	win_panel.size = Vector2(500, 350)
+	win_panel.position = Vector2(380, 70)   # 跟 game_over_panel 用同一組尺寸，理由同上
+	win_panel.size = Vector2(520, 580)
 	win_panel.hide()
 	ui_layer.add_child(win_panel)
 
@@ -1918,8 +2571,9 @@ func _setup_ui() -> void:
 	win_vbox.add_child(win_title)
 
 	win_final_label = Label.new()
-	win_final_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	win_final_label.add_theme_font_size_override("font_size", 22)
+	win_final_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT   # 理由同 final_label
+	win_final_label.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	win_final_label.add_theme_font_size_override("font_size", 20)
 	win_final_label.add_theme_color_override("font_color", Color(0.9, 0.9, 0.9))
 	win_vbox.add_child(win_final_label)
 

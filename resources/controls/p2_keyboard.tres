@@ -1,0 +1,10 @@
+[gd_resource type="Resource" script_class="ControlProfile" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/control_profile.gd" id="1_p2kbd"]
+
+[resource]
+script = ExtResource("1_p2kbd")
+device_type = 0
+action_prefix = "p2_"
+device_id = 0
+deadzone = 0.35

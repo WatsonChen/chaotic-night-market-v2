@@ -48,27 +48,73 @@ extends Node
 @export var sfx_mutation_dur    : float = 0.20
 @export var sfx_win_note_dur    : float = 0.18
 @export var sfx_lose_note_dur   : float = 0.18
+@export var sfx_chain_hit_freq       : float = 500.0
+@export var sfx_chain_hit_dur        : float = 0.06
+@export var sfx_mutation_apply_f0    : float = 500.0
+@export var sfx_mutation_apply_f1    : float = 1000.0
+@export var sfx_mutation_apply_dur   : float = 0.14
+@export var sfx_spike_warning_freq   : float = 880.0
+@export var sfx_spike_warning_dur    : float = 0.09
 
 # ── SFX 名稱常數 ──────────────────────────────────
-const HIT_PLAYER = "hit_player"
-const HIT_ENEMY  = "hit_enemy"
-const BIG_BREAK  = "big_break"
-const COMPLAINT  = "complaint"
-const MUTATION   = "mutation"
-const WIN        = "win"
-const LOSE       = "lose"
+const HIT_PLAYER     = "hit_player"
+const HIT_ENEMY      = "hit_enemy"
+const BIG_BREAK      = "big_break"
+const COMPLAINT      = "complaint"
+const MUTATION       = "mutation"
+const WIN            = "win"
+const LOSE           = "lose"
+const CHAIN_HIT      = "chain_hit"       # 玩家擊退連鎖撞飛敵人/隊友
+const MUTATION_APPLY = "mutation_apply"  # 突變選擇後、效果真正套用的瞬間
+const SPIKE_WARNING  = "spike_warning"   # 失控潮 / 最後衝刺警告
 
 const _SR        = 44100   # 取樣率
-const _POOL_SIZE = 8
 
 # ── Phase 閾值（鏡像 main.gd 的 stage 設定）──────
 const _PHASE2_AT = 4
 const _PHASE3_AT = 8
 
+# ── 優先級 / Cooldown 保護 ─────────────────────────
+# 目的：高壓混亂場面下 hit_enemy/hit_player/chain_hit 會非常密集地觸發，
+# 若跟 complaint/big_break 這類「訊息性」音效共用同一組播放通道，
+# 密集的命中音會直接打斷（AudioStreamPlayer.play() 會截斷正在播放的音），
+# 導致重要訊息音被洗掉、聽不見。
+# 做法：只做「兩個獨立通道池」+「每個音效自己的最短重播間隔」，
+# 不做完整的 mixer/bus 分層，保持輕量。
+enum Priority { LOW, HIGH }
+
+const _PRIORITY := {
+	HIT_ENEMY:      Priority.LOW,
+	HIT_PLAYER:     Priority.LOW,
+	CHAIN_HIT:      Priority.LOW,   # 連鎖命中頻率跟 hit_enemy 同級甚至更密集，歸低優先級
+	COMPLAINT:      Priority.HIGH,
+	BIG_BREAK:      Priority.HIGH,
+	MUTATION:       Priority.HIGH,
+	MUTATION_APPLY: Priority.HIGH,
+	SPIKE_WARNING:  Priority.HIGH,
+	WIN:            Priority.HIGH,
+	LOSE:           Priority.HIGH,
+}
+
+# 同一音效的最短重播間隔（秒）。未列出 = 不限制。
+# 高頻事件（客訴連續抵達、連鎖命中、失控潮/衝刺兩處都可能觸發警告音）
+# 靠這個避免短時間內重複洗版、聽起來跳針。
+const _MIN_RETRIGGER_INTERVAL := {
+	COMPLAINT:     0.06,
+	CHAIN_HIT:     0.08,
+	SPIKE_WARNING: 1.5,
+}
+
+const _POOL_SIZE_LOW  = 6   # hit_enemy / hit_player / chain_hit 共用
+const _POOL_SIZE_HIGH = 3   # complaint / big_break / mutation 系 / win / lose 專用，不被上面的洗掉
+
 # ── SFX ──────────────────────────────────────────
-var _sfx_streams : Dictionary = {}
-var _sfx_players : Array      = []
-var _sfx_idx     : int        = 0
+var _sfx_streams     : Dictionary = {}
+var _sfx_players_low  : Array = []
+var _sfx_players_high : Array = []
+var _idx_low  : int = 0
+var _idx_high : int = 0
+var _last_play_at : Dictionary = {}   # sfx_name -> 上次播放的秒數（Time.get_ticks_msec 基準）
 
 # ── BGM 即時節拍器狀態 ────────────────────────────
 var _bpm         : float = 100.0   # 當前（平滑插值）BPM
@@ -92,12 +138,18 @@ var _bgm_extra : AudioStreamPlayer   # Phase 4 tension stab
 func _ready() -> void:
 	add_to_group("audio_manager")
 
-	# ── SFX 播放池 ────────────────────────────────
-	for _i in range(_POOL_SIZE):
+	# ── SFX 播放池（低優先級 / 高優先級各自獨立）──────
+	for _i in range(_POOL_SIZE_LOW):
 		var p := AudioStreamPlayer.new()
 		p.bus = "Master"
 		add_child(p)
-		_sfx_players.append(p)
+		_sfx_players_low.append(p)
+
+	for _i in range(_POOL_SIZE_HIGH):
+		var p := AudioStreamPlayer.new()
+		p.bus = "Master"
+		add_child(p)
+		_sfx_players_high.append(p)
 
 	# ── BGM 鼓組 ──────────────────────────────────
 	_bgm_kick  = _mk_bgm_player(_gen_kick())
@@ -177,8 +229,25 @@ func update_complaints(count: int) -> void:
 func play(sfx_name: String) -> void:
 	if not _sfx_streams.has(sfx_name):
 		return
-	var p := _sfx_players[_sfx_idx % _POOL_SIZE] as AudioStreamPlayer
-	_sfx_idx += 1
+
+	# ── Cooldown：同一音效太密集觸發時直接略過，避免跳針 ──
+	var min_interval : float = _MIN_RETRIGGER_INTERVAL.get(sfx_name, 0.0)
+	if min_interval > 0.0:
+		var now := Time.get_ticks_msec() / 1000.0
+		var last : float = _last_play_at.get(sfx_name, -INF)
+		if now - last < min_interval:
+			return
+		_last_play_at[sfx_name] = now
+
+	# ── 依優先級選通道：LOW 絕不會搶到 HIGH 的播放器 ──
+	var p : AudioStreamPlayer
+	if _PRIORITY.get(sfx_name, Priority.LOW) == Priority.HIGH:
+		p = _sfx_players_high[_idx_high % _POOL_SIZE_HIGH]
+		_idx_high += 1
+	else:
+		p = _sfx_players_low[_idx_low % _POOL_SIZE_LOW]
+		_idx_low += 1
+
 	p.stream    = _sfx_streams[sfx_name]
 	p.volume_db = linear_to_db(clampf(sfx_volume * master_volume, 0.001, 1.0))
 	p.play()
@@ -292,12 +361,19 @@ func _build_sfx() -> void:
 	_sfx_streams[HIT_PLAYER] = _make_sine(sfx_hit_player_freq, sfx_hit_player_dur, 0.65)
 	_sfx_streams[HIT_ENEMY]  = _make_sine(sfx_hit_enemy_freq,  sfx_hit_enemy_dur,  0.50)
 	_sfx_streams[BIG_BREAK]  = _make_sweep(sfx_big_break_f0, sfx_big_break_f1,
-	                                        sfx_big_break_dur, 0.75)
+											sfx_big_break_dur, 0.75)
 	_sfx_streams[COMPLAINT]  = _make_sine(sfx_complaint_freq, sfx_complaint_dur, 0.60)
 	_sfx_streams[MUTATION]   = _make_sweep(sfx_mutation_f0, sfx_mutation_f1,
-	                                        sfx_mutation_dur, 0.60)
+											sfx_mutation_dur, 0.60)
 	_sfx_streams[WIN]        = _make_melody([400.0, 600.0, 800.0], sfx_win_note_dur,  0.70)
 	_sfx_streams[LOSE]       = _make_melody([600.0, 400.0, 200.0], sfx_lose_note_dur, 0.70)
+
+	# ── placeholder：程式生成音，之後可替換成正式音檔 ──
+	_sfx_streams[CHAIN_HIT]      = _make_sine(sfx_chain_hit_freq, sfx_chain_hit_dur, 0.55)
+	_sfx_streams[MUTATION_APPLY] = _make_sweep(sfx_mutation_apply_f0, sfx_mutation_apply_f1,
+												sfx_mutation_apply_dur, 0.70)
+	_sfx_streams[SPIKE_WARNING]  = _make_melody([sfx_spike_warning_freq, sfx_spike_warning_freq],
+												 sfx_spike_warning_dur, 0.68)
 
 
 func _make_sine(freq: float, dur: float, vol: float) -> AudioStreamWAV:

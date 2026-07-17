@@ -42,12 +42,12 @@ const REACH_DIST = 36.0
 @export var armor_bar_fill_speed: float = 8.0
 @export var armor_bar_bg_color: Color = Color(0.18, 0.08, 0.04, 0.90)
 @export var armor_bar_outline_color: Color = Color(1.0, 0.95, 0.8, 0.9)
-@export var p1_bar_color: Color = Color(1.0, 0.62, 0.12)
-@export var p2_bar_color: Color = Color(0.20, 0.82, 1.0)
+@export var p1_bar_color: Color = Color(0.95, 0.40, 0.08)   # 讀圖性配色 v1：等同 PLAYER_HEAVY，直接對應 P1 的識別色
+@export var p2_bar_color: Color = Color(0.20, 0.55, 1.00)   # 讀圖性配色 v1：等同 PLAYER_SPEEDY，直接對應 P2 的識別色
 
 @export_group("Visual")
-@export var body_color: Color = Color(0.64, 0.08, 0.08)
-@export var outline_color: Color = Color(1.0, 0.78, 0.22)
+@export var body_color: Color = Color(0.55, 0.05, 0.18)     # 讀圖性配色 v1：等同 BIG_ENEMY，跟一般敵人的純紅拉開
+@export var outline_color: Color = Color(0.85, 0.20, 0.38)  # 讀圖性配色 v1：等同 BIG_ENEMY_ACCENT，換掉原本撞色的金黃外框
 @export var armor_glow_color: Color = Color(1.0, 0.92, 0.70)
 
 signal reach_center(complaint_delta: int)

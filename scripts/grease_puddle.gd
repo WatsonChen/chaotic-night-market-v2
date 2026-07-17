@@ -17,7 +17,7 @@ extends Node2D
 @export var slip_accel: float = 900.0      # ← 調這裡改滑力強度
 @export var dir_change_t: float = 0.14     # 滑力方向更換間隔（秒）
 @export var max_active_puddles: int = 5
-@export var puddle_color: Color = Color(0.72, 0.72, 0.18, 1.0)
+@export var puddle_color: Color = Color(0.70, 0.70, 0.20, 1.0)   # 讀圖性配色 v1：等同 GameplayPalette.SLIP_ZONE，見 docs/readability_palette.md
 
 static var active_count : int = 0
 

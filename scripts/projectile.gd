@@ -137,12 +137,28 @@ func _on_body_entered(body: Node) -> void:
 		_spawn_hit_effect(true, ff_hit_effect_scale)          # 友火特效放大
 		body.apply_knockback(direction.normalized(), player_knockback)
 		_do_hit_stop_and_free(ff_hit_stop_frames)              # 友火專屬 hit stop
+		_record_stat("friendly_fire_hits")
+
+	elif body.is_in_group("hazards"):
+		_dead = true
+		_play_sfx("hit_enemy")   # 借用現有音效，不新增新的 SFX 常數
+		_spawn_hit_effect(false, 1.0)
+		if body.has_method("take_hit"):
+			body.take_hit()
+		_do_hit_stop_and_free(hit_stop_frames)
 
 
 func _play_sfx(sfx_name: String) -> void:
 	var mgrs = get_tree().get_nodes_in_group("audio_manager")
 	if mgrs.size() > 0:
 		mgrs[0].play(sfx_name)
+
+
+## 一局結算統計用（見 main.gd 的 record_stat()）。current_scene 在遊玩期間就是 Main 節點本身。
+func _record_stat(key: String) -> void:
+	var scene = get_tree().current_scene
+	if scene != null and scene.has_method("record_stat"):
+		scene.record_stat(key)
 
 func _spawn_hit_effect(is_player: bool, scale: float) -> void:
 	var fx = Node2D.new()

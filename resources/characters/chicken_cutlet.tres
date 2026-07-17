@@ -1,0 +1,16 @@
+[gd_resource type="Resource" script_class="PlayerCharacter" format=3 uid="uid://x0ngsvjk15fq"]
+
+[ext_resource type="Script" uid="uid://dc80ntjnngs7v" path="res://scripts/player_character.gd" id="1_chicken"]
+
+[resource]
+script = ExtResource("1_chicken")
+character_name = "雞排攤"
+body_color = Color(0.95, 0.8, 0.12, 1)
+marker_shape = "triangle"
+shoot_cooldown = 0.6
+proj_radius = 20.0
+proj_speed = 260.0
+proj_knockback_base = 2600.0
+proj_enemy_speed = 1150.0
+proj_hit_stop = 6
+proj_color = Color(1, 0.92, 0.55, 1)

@@ -3,23 +3,19 @@ extends CharacterBody2D
 # ===================================================
 # player.gd — 玩家控制
 #
-# ── 角色設定（_ready 中依 player_index 初始化）──────
+# 角色的武器數值/外觀來自 character（PlayerCharacter resource），
+# 輸入來源來自 control_profile（ControlProfile resource），
+# 兩者都由 main.gd 在 _spawn_players() 指派。
+# player_index 只作為玩家「代號」使用（記分、攻擊者 ID、
+# 突變效果指定對象），與角色數值、輸入來源無關。
 #
-# P1 橘色「熱狗攤」
-#   移動：WASD  |  攻擊方向：最後移動方向  |  射擊：左鍵
-#   風格：單發大顆、強擊退、較慢節奏。一發出事。
-#
-# P2 藍色「珍奶攤」
-#   移動：IJKL  |  攻擊方向：最後移動方向  |  射擊：Space
-#   風格：快速 burst 連射（每次 3 發）、小顆弱推、刷畫面。
-#
-# ── 未來多機分離說明 ────────────────────────────────
-#   目前 P1/P2 共用一個腳本便於測試。
-#   真正上線時只需讓每台機器的 player_index 固定為 1，
-#   輸入改為搖桿/鍵盤 rebind 即可，架構無需大改。
+# 若場景未指派 character / control_profile（例如獨立測試），
+# _ready() 會依 player_index 退回舊版 P1/P2 預設值。
 # ===================================================
 
 @export var player_index : int = 1
+@export var character        : PlayerCharacter = null
+@export var control_profile  : ControlProfile  = null
 
 # ── 通用移動參數 ──────────────────────────────────
 const SPEED           = 200.0
@@ -38,35 +34,10 @@ const ARENA_Y_MAX = 620.0
 const PROJECTILE_SCENE = preload("res://scenes/projectile.tscn")
 const MAP_CENTER       = Vector2(640.0, 360.0)   # 需與 main.gd 一致
 
-# ── 角色專屬攻擊參數（在 _ready 中依 player_index 填入）
-# ┌──────────────────────────────────────────────────────┐
-# │  P1 熱狗攤 — 大擊退 / 大事故型                        │
-# ├──────────────────────┬───────────────────────────────┤
-# │ shoot_cooldown  0.55 │ ← 發射間隔（秒）              │
-# │ proj_radius    18.0  │ ← 子彈視覺 & 碰撞半徑         │
-# │ proj_speed    320.0  │ ← 子彈飛行速度（px/s）        │
-# │ proj_knockback 2200  │ ← 友火擊退力（玩家）          │
-# │ proj_enemy_spd 1000  │ ← 打敵人飛出速度（px/s）      │
-# │ proj_hit_stop    5   │ ← 命中凍結幀數                │
-# └──────────────────────┴───────────────────────────────┘
-#
-# ┌──────────────────────────────────────────────────────┐
-# │  P2 珍奶攤 — 高頻干擾 / 持續失控型                    │
-# ├──────────────────────┬───────────────────────────────┤
-# │ shoot_cooldown  0.42 │ ← burst 後冷卻（秒）          │
-# │ burst_count       3  │ ← 每次連射發數                │
-# │ burst_delay   0.075  │ ← 連射每發間隔（秒）          │
-# │ proj_radius     7.0  │ ← 子彈視覺 & 碰撞半徑         │
-# │ proj_speed    560.0  │ ← 子彈飛行速度（px/s）        │
-# │ proj_knockback  850  │ ← 友火擊退力（玩家）          │
-# │ proj_enemy_spd  500  │ ← 打敵人飛出速度（px/s）      │
-# │ proj_hit_stop    2   │ ← 命中凍結幀數                │
-# └──────────────────────┴───────────────────────────────┘
-#
-# 比值參考（P1 / P2）：
-#   敵人飛出速度  1000 / 500  = 2.0×   ← 符合設計目標
-#   友火擊退力   2200 / 850  = 2.6×   ← P2 burst×3 可追上
-#   子彈半徑     18.0 / 7.0  = 2.6×   ← P1 碰撞面積大
+# ── 角色專屬攻擊參數 ──────────────────────────────
+# 數值定義在 resources/characters/*.tres（PlayerCharacter），
+# _ready() 讀入後複製到下方這組 var，供全腳本使用。
+# 現有兩個角色：hotdog.tres（熱狗攤）、bubble_tea.tres（珍奶攤）。
 
 # ── Friendly Fire 放大參數 ────────────────────────
 @export_group("Friendly Fire")
@@ -100,7 +71,7 @@ var p2_always_grease    : bool  = false # 突變② 珍珠大爆發
 var proj_radius_mult    : float = 1.0   # 突變① 熱狗太興奮：子彈半徑倍率
 
 var shoot_cooldown   : float = 0.30
-var burst_count      : int   = 1      # =1 表示單發（P1 模式）
+var burst_count      : int   = 1      # =1 表示單發
 var burst_delay      : float = 0.0
 var proj_radius      : float = 12.0
 var proj_speed       : float = 400.0
@@ -110,7 +81,7 @@ var proj_hit_stop    : int   = 2
 var proj_color       : Color = Color(1.0, 0.92, 0.1)
 
 var _color : Color:
-	get: return Color(1.0, 0.50, 0.05) if player_index == 1 else Color(0.2, 0.55, 1.0)
+	get: return character.body_color if character != null else Color.WHITE
 
 var _facing         : Vector2 = Vector2.RIGHT
 var _shoot_cd       : float   = 0.0
@@ -132,46 +103,79 @@ var _burst_dir       : Vector2 = Vector2.RIGHT  # burst 期間固定方向
 func _ready() -> void:
 	add_to_group("players")
 
-	# ── 依角色設定攻擊參數 ────────────────────────
-	if player_index == 1:
-		# P1 熱狗攤：大顆慢發、強擊退 — 一發造成大事故
-		shoot_cooldown   = 0.55
-		burst_count      = 1
-		proj_radius      = 18.0
-		proj_speed       = 320.0
-		proj_knockback   = 2200.0 * ff_knockback_multiplier  # 預設 → 4950（2.25×）
-		proj_enemy_speed = 1000.0
-		proj_hit_stop    = 5
-		proj_color       = Color(1.0, 0.75, 0.05)   # 橙黃
+	if character == null:
+		character = _fallback_character()
+	if control_profile == null:
+		control_profile = _fallback_control_profile()
 
-	else:
-		# P2 珍奶攤：小顆高頻連射 burst — 累積干擾造成失控
-		shoot_cooldown   = 0.42   # burst 後冷卻
-		burst_count      = 3
-		burst_delay      = 0.075  # 連射每發間隔
-		proj_radius      = 7.0
-		proj_speed       = 560.0
-		proj_knockback   = 850.0 * ff_knockback_multiplier  # 預設 → 1912（2.25×）
-		proj_enemy_speed = 500.0
-		proj_hit_stop    = 2
-		proj_color       = Color(0.35, 0.85, 1.0)   # 青藍
+	# ── 依角色資料設定攻擊參數 ────────────────────
+	shoot_cooldown   = character.shoot_cooldown
+	burst_count      = character.burst_count
+	burst_delay      = character.burst_delay
+	proj_radius      = character.proj_radius
+	proj_speed       = character.proj_speed
+	proj_knockback   = character.proj_knockback_base * ff_knockback_multiplier
+	proj_enemy_speed = character.proj_enemy_speed
+	proj_hit_stop    = character.proj_hit_stop
+	proj_color       = character.proj_color
 
 	queue_redraw()
+
+
+func _fallback_character() -> PlayerCharacter:
+	# 場景未指派 character 時的退回值，維持重構前的 P1/P2 手感
+	var c := PlayerCharacter.new()
+	if player_index == 1:
+		c.character_name = "熱狗攤"
+		c.body_color = GameplayPalette.PLAYER_HEAVY
+		c.marker_shape = "circle"
+		c.shoot_cooldown = 0.55
+		c.burst_count = 1
+		c.proj_radius = 18.0
+		c.proj_speed = 320.0
+		c.proj_knockback_base = 2200.0
+		c.proj_enemy_speed = 1000.0
+		c.proj_hit_stop = 5
+		c.proj_color = GameplayPalette.PLAYER_HEAVY_ACCENT
+	else:
+		c.character_name = "珍奶攤"
+		c.body_color = GameplayPalette.PLAYER_SPEEDY
+		c.marker_shape = "square"
+		c.shoot_cooldown = 0.42
+		c.burst_count = 3
+		c.burst_delay = 0.075
+		c.proj_radius = 7.0
+		c.proj_speed = 560.0
+		c.proj_knockback_base = 850.0
+		c.proj_enemy_speed = 500.0
+		c.proj_hit_stop = 2
+		c.proj_color = GameplayPalette.PLAYER_SPEEDY_ACCENT
+	return c
+
+
+func _fallback_control_profile() -> ControlProfile:
+	var cp := ControlProfile.new()
+	cp.device_type = ControlProfile.DeviceType.KEYBOARD
+	cp.action_prefix = "p1_" if player_index == 1 else "p2_"
+	return cp
 
 
 func _get_move_dir() -> Vector2:
 	# 回傳當前幀的原始移動方向（未正規化），供 _process 與 _physics_process 共用
 	var d := Vector2.ZERO
-	if player_index == 1:
-		if Input.is_action_pressed("p1_up"):    d.y -= 1.0
-		if Input.is_action_pressed("p1_down"):  d.y += 1.0
-		if Input.is_action_pressed("p1_left"):  d.x -= 1.0
-		if Input.is_action_pressed("p1_right"): d.x += 1.0
-	else:
-		if Input.is_action_pressed("p2_up"):    d.y -= 1.0
-		if Input.is_action_pressed("p2_down"):  d.y += 1.0
-		if Input.is_action_pressed("p2_left"):  d.x -= 1.0
-		if Input.is_action_pressed("p2_right"): d.x += 1.0
+
+	if control_profile.device_type == ControlProfile.DeviceType.GAMEPAD:
+		d.x = Input.get_joy_axis(control_profile.device_id, JOY_AXIS_LEFT_X)
+		d.y = Input.get_joy_axis(control_profile.device_id, JOY_AXIS_LEFT_Y)
+		if d.length() < control_profile.deadzone:
+			d = Vector2.ZERO
+		return d
+
+	var prefix = control_profile.action_prefix
+	if Input.is_action_pressed(prefix + "up"):    d.y -= 1.0
+	if Input.is_action_pressed(prefix + "down"):  d.y += 1.0
+	if Input.is_action_pressed(prefix + "left"):  d.x -= 1.0
+	if Input.is_action_pressed(prefix + "right"): d.x += 1.0
 	return d
 
 
@@ -200,15 +204,13 @@ func _process(delta: float) -> void:
 
 	var shoot_dir := move_input.normalized()
 
-	if player_index == 1:
-		# P1 熱狗攤：單發慢重
-		if _shoot_cd <= 0.0:
+	if _shoot_cd <= 0.0:
+		if burst_count <= 1:
+			# 單發角色（例：熱狗攤）
 			_fire_projectile(shoot_dir)
 			_shoot_cd = shoot_cooldown
-
-	else:
-		# P2 珍奶攤：burst 連射
-		if _shoot_cd <= 0.0:
+		else:
+			# burst 連射角色（例：珍奶攤）
 			_burst_dir       = shoot_dir
 			_fire_projectile(_burst_dir)
 			_burst_remaining = burst_count - 1
@@ -274,12 +276,16 @@ func _physics_process(delta: float) -> void:
 		for enemy in get_tree().get_nodes_in_group("enemies"):
 			if global_position.distance_to(enemy.global_position) < KNOCKBACK_HIT_RANGE:
 				enemy.take_hit(_knockback.normalized(), _knockback.length() * ff_chain_enemy_ratio, player_index)
+				_play_chain_sfx()
+				_record_run_stat("chain_enemy_hits")
 		# 撞飛隊友（新：玩家→玩家連鎖）
 		for other in get_tree().get_nodes_in_group("players"):
 			if other == self:
 				continue
 			if global_position.distance_to(other.global_position) < KNOCKBACK_HIT_RANGE:
 				other.apply_knockback(_knockback.normalized(), _knockback.length() * ff_chain_player_ratio)
+				_play_chain_sfx()
+				_record_run_stat("chain_player_hits")
 
 	_clamp_to_arena()
 
@@ -304,10 +310,17 @@ func _draw() -> void:
 	draw_arc(Vector2.ZERO, RADIUS, 0.0, TAU, 40, Color.WHITE, 2.5)
 	draw_line(Vector2.ZERO, _facing * (RADIUS + 12.0), Color.WHITE, 3.0)
 
-	if player_index == 1:
-		draw_circle(Vector2.ZERO, 6.0, Color.WHITE)
-	else:
-		draw_rect(Rect2(-6.0, -6.0, 12.0, 12.0), Color.WHITE)
+	match character.marker_shape:
+		"square":
+			draw_rect(Rect2(-6.0, -6.0, 12.0, 12.0), Color.WHITE)
+		"triangle":
+			draw_colored_polygon(PackedVector2Array([
+				Vector2(0.0, -7.0),
+				Vector2(6.5, 5.5),
+				Vector2(-6.5, 5.5),
+			]), Color.WHITE)
+		_:
+			draw_circle(Vector2.ZERO, 6.0, Color.WHITE)
 
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
@@ -375,6 +388,20 @@ func _fire_projectile(dir: Vector2) -> void:
 
 	container.add_child(proj)
 	proj.global_position = global_position + dir.normalized() * (RADIUS + proj_radius + 4.0)
+
+
+func _play_chain_sfx() -> void:
+	# 音量池的 cooldown 由 audio_manager.gd 自己擋，這裡不用管密集觸發
+	var mgrs = get_tree().get_nodes_in_group("audio_manager")
+	if mgrs.size() > 0:
+		mgrs[0].play(mgrs[0].CHAIN_HIT)
+
+
+## 一局結算統計用（見 main.gd 的 record_stat()）。current_scene 在遊玩期間就是 Main 節點本身。
+func _record_run_stat(key: String) -> void:
+	var scene = get_tree().current_scene
+	if scene != null and scene.has_method("record_stat"):
+		scene.record_stat(key)
 
 
 func _clamp_to_arena() -> void:

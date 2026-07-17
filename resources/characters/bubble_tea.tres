@@ -1,0 +1,18 @@
+[gd_resource type="Resource" script_class="PlayerCharacter" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/player_character.gd" id="1_bubbletea"]
+
+[resource]
+script = ExtResource("1_bubbletea")
+character_name = "珍奶攤"
+body_color = Color(0.2, 0.55, 1, 1)
+marker_shape = "square"
+shoot_cooldown = 0.42
+burst_count = 3
+burst_delay = 0.075
+proj_radius = 7.0
+proj_speed = 560.0
+proj_knockback_base = 850.0
+proj_enemy_speed = 500.0
+proj_hit_stop = 2
+proj_color = Color(0.35, 0.85, 1, 1)
